@@ -29,21 +29,13 @@ Full CRUD interface for the interactions table:
 
 ## Running
 
-### Node.js server (primary)
+### Node.js server
 ```bash
+pip install -r src/backend/predictive_model/requirements.txt
 npm install
 npm run dev
 # → http://localhost:3000
 ```
-
-### Python ML server (optional alternative)
-```bash
-cd backend
-pip install -r requirements.txt
-python app.py
-# → http://localhost:5000
-```
-
 ## Python Model
 
 `backend/model.py` — `PurchaseModel` class:
