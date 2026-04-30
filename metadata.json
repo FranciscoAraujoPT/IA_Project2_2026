@@ -1,0 +1,6 @@
+{
+  "name": "Customer Response Time Analyzer",
+  "description": "Analyze how customer response time affects purchase probability using machine learning",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
