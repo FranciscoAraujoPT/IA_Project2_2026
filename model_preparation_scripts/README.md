@@ -110,6 +110,7 @@ Foram excluídas:
 - `customer_id`
 - `contact_datetime`
 - `first_response_datetime`
+- `product_id`
 
 Motivos:
 
@@ -118,6 +119,8 @@ Motivos:
 `contact_datetime` foi substituído por variáveis temporais derivadas.
 
 `first_response_datetime` foi excluído porque a informação relevante já está contida em `response_time_min`.
+
+`product_id` foi excluído porque é um identificador de produto. A informação relevante está capturada pelas variáveis categóricas `product_category`, `product_subcategory` e `product_collection`, que generalizam padrões em vez de memorizar produtos específicos.
 
 ### Variáveis não usadas por risco de data leakage
 

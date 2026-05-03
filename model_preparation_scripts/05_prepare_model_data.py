@@ -24,7 +24,7 @@ DROP_COLUMNS = ["contact_id", "customer_id", "contact_datetime", "first_response
 TARGET = "converted"
 
 CATEGORICAL_COLUMNS = [
-    "contact_source_type", "customer_type", "product_id", "product_category",
+    "contact_source_type", "customer_type", "product_category",
     "product_subcategory", "product_collection",
 ]
 
