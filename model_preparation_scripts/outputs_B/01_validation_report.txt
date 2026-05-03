@@ -1,0 +1,12 @@
+01. DATA VALIDATION REPORT
+
+File: dataset_B_inconclusive_contacts_train.csv
+Rows: 500
+Columns: 14
+
+Missing columns: []
+Extra columns: []
+Unexpected nulls:
+None
+
+Errors: None

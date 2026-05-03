@@ -1,0 +1,9 @@
+02. DERIVED VARIABLES REPORT
+
+response_time_min: OK
+is_payday_period: OK
+is_peak_season: OK
+converted: OK
+
+Number of mismatched rows: 0
+Mismatches file: outputs_A/02_derived_variable_mismatches.csv

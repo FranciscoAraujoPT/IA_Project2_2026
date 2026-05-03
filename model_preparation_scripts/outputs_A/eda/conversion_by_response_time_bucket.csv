@@ -1,0 +1,6 @@
+response_time_bucket,contacts,conversions,conversion_rate
+<1h,110,81,73.6
+1-4h,127,83,65.4
+4-12h,104,50,48.1
+12-24h,65,20,30.8
+>24h,94,16,17.0
