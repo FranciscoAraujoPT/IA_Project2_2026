@@ -1,125 +1,127 @@
 """
-PurchaseModel — Logistic Regression predictive model for customer purchase probability.
+model.py — Logistic regression trained on forward-chained features.
 
-Uses scikit-learn with feature engineering for:
-  - response_time_min  : how long the customer waited for a reply
-  - price              : product price in USD
-  - patience_level     : customer patience score 0–1
-  - segment            : customer spending tier (low / medium / high)
-  - time_of_day        : morning / afternoon / evening
-  - complexity         : product complexity 1–10
-
-Adds interaction features (response_time * patience, price * complexity) to
-capture non-linear relationships that a plain linear model would miss.
+Keeps the model, scaler, encodings, and metrics together.
+Call train() whenever data or chain steps change.
 """
 
-import pandas as pd
-import sqlite3
+from __future__ import annotations
 import numpy as np
+import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, roc_auc_score, f1_score, precision_score, recall_score
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
+
+try:
+    from .chain import ChainStep, apply_chain
+except ImportError:
+    from chain import ChainStep, apply_chain
 
 
 class PurchaseModel:
-    def __init__(self):
-        self.model = LogisticRegression(C=1.0, max_iter=500, random_state=42)
+    def __init__(self) -> None:
+        self.clf = LogisticRegression(C=1.0, max_iter=1000, random_state=42)
         self.scaler = StandardScaler()
-        self.label_encoders: dict = {}
+        self.encodings: dict[str, dict[str, int]] = {}
+        self.feature_cols: list[str] = []
         self.is_trained = False
         self.metrics: dict = {}
-        self.feature_names = [
-            'response_time_min', 'price', 'patience_level',
-            'segment_enc', 'time_of_day_enc', 'complexity',
-            # Interaction / engineered features
-            'rt_x_impatience',   # response_time * (1 - patience)
-            'price_x_complexity', # price * complexity / 10
-            'log_rt',            # log(response_time) — diminishing returns
-        ]
 
-    def _engineer(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add interaction and log features to the dataframe."""
-        df = df.copy()
-        df['rt_x_impatience'] = df['response_time_min'] * (1.0 - df['patience_level'])
-        df['price_x_complexity'] = df['price'] * df['complexity'] / 10.0
-        df['log_rt'] = np.log1p(df['response_time_min'])
-        return df
+    # ── Training ──────────────────────────────────────────────────────────────
 
-    def train(self, db_path: str) -> dict:
-        """Load data from SQLite, engineer features, and fit the model."""
-        conn = sqlite3.connect(db_path)
-        query = """
-        SELECT
-            i.response_time_min,
-            p.price,
-            c.patience_level,
-            c.segment,
-            p.complexity,
-            i.time_of_day,
-            i.bought
-        FROM interactions i
-        JOIN customers c ON i.customer_id = c.customer_id
-        JOIN products p  ON i.product_id  = p.product_id
+    def train(self, df: pd.DataFrame, outcome_col: str, steps: list[ChainStep]) -> dict:
         """
-        df = pd.read_sql_query(query, conn)
-        conn.close()
+        Fit the model on df using the provided chain steps.
+        outcome_col must be a binary 0/1 column in df.
+        """
+        if df.empty or outcome_col not in df.columns:
+            raise ValueError(f"DataFrame is empty or missing outcome column '{outcome_col}'")
 
-        if df.empty:
-            raise ValueError("No training data found in database")
+        # Build encodings for categorical encode steps
+        self.encodings = {}
+        for step in steps:
+            if step.enabled and step.type == "encode":
+                col = step.config["col"]
+                if col in df.columns:
+                    unique_vals = df[col].astype(str).unique().tolist()
+                    self.encodings[col] = {v: i for i, v in enumerate(unique_vals)}
 
-        # Encode categoricals
-        for col in ['segment', 'time_of_day']:
-            le = LabelEncoder()
-            df[f'{col}_enc'] = le.fit_transform(df[col])
-            self.label_encoders[col] = le
+        # Apply forward chain
+        df_feat = apply_chain(df, steps, self.encodings)
 
-        df = self._engineer(df)
+        # Feature columns = all numeric except outcome
+        outcome_vals = pd.to_numeric(df[outcome_col], errors="coerce")
+        valid_mask = outcome_vals.notna()
 
-        X = df[self.feature_names].values
-        y = df['bought'].values
+        # Collect feature cols from the chain output (exclude outcome and non-numeric)
+        candidate_cols = [c for c in df_feat.columns if c != outcome_col]
+        numeric_candidates = []
+        for col in candidate_cols:
+            series = pd.to_numeric(df_feat[col], errors="coerce")
+            if series.notna().sum() > len(df_feat) * 0.5:
+                numeric_candidates.append(col)
+                df_feat[col] = series
+
+        self.feature_cols = numeric_candidates
+        if not self.feature_cols:
+            raise ValueError("No usable numeric features found after chain application")
+
+        X = df_feat.loc[valid_mask, self.feature_cols].fillna(0).values
+        y = (outcome_vals[valid_mask] > 0.5).astype(int).values
+
+        if len(X) < 10:
+            raise ValueError(f"Not enough valid training samples ({len(X)} < 10)")
 
         X_scaled = self.scaler.fit_transform(X)
-        self.model.fit(X_scaled, y)
+        self.clf.fit(X_scaled, y)
         self.is_trained = True
 
-        # Basic training metrics
-        y_pred = self.model.predict(X_scaled)
-        y_prob = self.model.predict_proba(X_scaled)[:, 1]
+        # Metrics
+        y_pred = self.clf.predict(X_scaled)
+        y_prob = self.clf.predict_proba(X_scaled)[:, 1]
         self.metrics = {
-            'samples': int(len(df)),
-            'accuracy': float(round(accuracy_score(y, y_pred), 4)),
-            'roc_auc': float(round(roc_auc_score(y, y_prob), 4)),
-            'positive_rate': float(round(y.mean(), 4)),
+            "samples": int(len(y)),
+            "accuracy": round(float(accuracy_score(y, y_pred)), 4),
+            "roc_auc": round(float(roc_auc_score(y, y_prob)), 4),
+            "f1": round(float(f1_score(y, y_pred, zero_division=0)), 4),
+            "precision": round(float(precision_score(y, y_pred, zero_division=0)), 4),
+            "recall": round(float(recall_score(y, y_pred, zero_division=0)), 4),
+            "positive_rate": round(float(y.mean()), 4),
+            "features": len(self.feature_cols),
         }
-        print(f"[model] Trained on {self.metrics['samples']} samples | "
-              f"AUC={self.metrics['roc_auc']} | Acc={self.metrics['accuracy']}")
+        print(f"[model] Trained | samples={self.metrics['samples']} | "
+              f"AUC={self.metrics['roc_auc']} | acc={self.metrics['accuracy']} | "
+              f"features={self.metrics['features']}")
         return self.metrics
 
-    def predict(self, input_data: dict) -> float:
-        """Return the probability of purchase (0–1) for one data point."""
+    # ── Prediction ────────────────────────────────────────────────────────────
+
+    def predict(self, row: dict, steps: list[ChainStep]) -> float:
         if not self.is_trained:
-            raise RuntimeError("Model is not trained yet. Call train() first.")
+            raise RuntimeError("Model is not trained yet")
 
-        df = pd.DataFrame([input_data])
+        df = pd.DataFrame([row])
+        df_feat = apply_chain(df, steps, self.encodings)
 
-        # Encode categoricals — handle unseen labels gracefully
-        for col in ['segment', 'time_of_day']:
-            le = self.label_encoders[col]
-            val = df[col].iloc[0]
-            if val not in le.classes_:
-                # Default to the middle class if unknown
-                df[f'{col}_enc'] = 1
-            else:
-                df[f'{col}_enc'] = le.transform(df[col])
+        X = np.zeros((1, len(self.feature_cols)))
+        for j, col in enumerate(self.feature_cols):
+            if col in df_feat.columns:
+                val = pd.to_numeric(df_feat[col].iloc[0], errors="coerce")
+                X[0, j] = float(val) if not np.isnan(val) else 0.0
 
-        df = self._engineer(df)
-        X = df[self.feature_names].values
         X_scaled = self.scaler.transform(X)
-        prob = self.model.predict_proba(X_scaled)[0][1]
-        return float(prob)
+        return float(self.clf.predict_proba(X_scaled)[0][1])
+
+    # ── Feature importance ────────────────────────────────────────────────────
+
+    def feature_importance(self) -> list[dict]:
+        if not self.is_trained:
+            return []
+        coefs = np.abs(self.clf.coef_[0])
+        pairs = sorted(zip(self.feature_cols, coefs), key=lambda x: x[1], reverse=True)
+        return [{"feature": f, "importance": round(float(w), 5)} for f, w in pairs]
 
     def get_metrics(self) -> dict:
-        return self.metrics if self.is_trained else {}
+        return {"trained": self.is_trained, **self.metrics}
