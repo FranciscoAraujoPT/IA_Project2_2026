@@ -201,6 +201,40 @@ python 06_train_random_forest.py --input-dir outputs_A/model_ready
 
 ---
 
+## `07_train_gradient_boosting.py` — Treino de Gradient Boosting
+
+Este script treina e avalia um modelo Gradient Boosting a partir dos ficheiros
+gerados pelo `05_prepare_model_data.py`.
+
+Usa os ficheiros não normalizados:
+
+- `X_train.csv`
+- `X_test.csv`
+- `y_train.csv`
+- `y_test.csv`
+
+**Objetivo:**  
+Treinar um segundo modelo baseado em árvores, mas com aprendizagem sequencial:
+cada nova árvore tenta corrigir erros das árvores anteriores.
+
+Como `GradientBoostingClassifier` não tem `class_weight`, o script usa pesos
+de amostra balanceados por defeito para lidar com possíveis diferenças entre
+as classes.
+
+Ficheiros gerados:
+
+- `gradient_boosting_metrics.csv`
+- `gradient_boosting_feature_importance.csv`
+- `gradient_boosting_model.pkl`
+
+Exemplo:
+
+```bash
+python 07_train_gradient_boosting.py --input-dir outputs_A/model_ready
+```
+
+---
+
 # Validação geral
 
 Os três datasets estão consistentes:

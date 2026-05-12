@@ -46,6 +46,9 @@ run_pipeline () {
   python3 06_train_random_forest.py \
     --input-dir "${OUTPUT_DIR}/model_ready"
 
+  python3 07_train_gradient_boosting.py \
+    --input-dir "${OUTPUT_DIR}/model_ready"
+
   echo ""
   echo "✅ Finished ${DATASET_NAME}"
   echo ""

@@ -1,0 +1,2 @@
+model,train_rows,test_rows,features,n_estimators,max_depth,min_samples_leaf,accuracy,roc_auc,f1,precision,recall
+random_forest,400,100,35,200,None,5,0.54,0.4432,0.08,0.1176,0.0606

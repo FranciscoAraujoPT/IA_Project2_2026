@@ -1,0 +1,2 @@
+model,train_rows,test_rows,features,n_estimators,learning_rate,max_depth,min_samples_leaf,subsample,balanced_sample_weight,accuracy,roc_auc,f1,precision,recall
+gradient_boosting,400,100,35,100,0.05,3,5,0.8,True,0.67,0.7092,0.6857,0.6545,0.72
