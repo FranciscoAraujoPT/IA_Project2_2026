@@ -48,7 +48,7 @@ def main() -> None:
     print("- hour_of_day")
     print("- fast_response_24h")
     print(f"\nOutput saved to: {output_path}")
-    print("\n✅ Feature creation completed.")
+    print("\nFeature creation completed.")
 
 
 if __name__ == "__main__":

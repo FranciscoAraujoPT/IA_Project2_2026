@@ -171,6 +171,36 @@ Random Forest e Gradient Boosting não precisam de normalização.
 
 ---
 
+## `06_train_random_forest.py` — Treino de Random Forest
+
+Este script treina e avalia um modelo Random Forest a partir dos ficheiros
+gerados pelo `05_prepare_model_data.py`.
+
+Usa os ficheiros não normalizados:
+
+- `X_train.csv`
+- `X_test.csv`
+- `y_train.csv`
+- `y_test.csv`
+
+**Objetivo:**  
+Treinar um modelo baseado em árvores e avaliar o desempenho no conjunto de
+teste, sem usar os ficheiros normalizados.
+
+Ficheiros gerados:
+
+- `random_forest_metrics.csv`
+- `random_forest_feature_importance.csv`
+- `random_forest_model.pkl`
+
+Exemplo:
+
+```bash
+python 06_train_random_forest.py --input-dir outputs_A/model_ready
+```
+
+---
+
 # Validação geral
 
 Os três datasets estão consistentes:

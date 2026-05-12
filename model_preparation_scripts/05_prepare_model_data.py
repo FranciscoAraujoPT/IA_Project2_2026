@@ -86,7 +86,7 @@ def main() -> None:
     print(f"Conversion rate in train: {y_train.mean() * 100:.1f}%")
     print(f"Conversion rate in test: {y_test.mean() * 100:.1f}%")
     print(f"\nSaved model-ready files to: {output_dir}")
-    print("\n✅ Model data preparation completed.")
+    print("\nModel data preparation completed.")
 
 
 if __name__ == "__main__":
