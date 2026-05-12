@@ -43,6 +43,9 @@ run_pipeline () {
     --input "${FEATURED_FILE}" \
     --output-dir "${OUTPUT_DIR}/model_ready"
 
+  python3 08_train_logistic_regression.py \
+    --input-dir "${OUTPUT_DIR}/model_ready"
+
   python3 06_train_random_forest.py \
     --input-dir "${OUTPUT_DIR}/model_ready"
 

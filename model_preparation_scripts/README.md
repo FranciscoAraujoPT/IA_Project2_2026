@@ -171,6 +171,37 @@ Random Forest e Gradient Boosting não precisam de normalização.
 
 ---
 
+## `08_train_logistic_regression.py` — Treino de Logistic Regression
+
+Este script treina e avalia um modelo Logistic Regression a partir dos ficheiros
+gerados pelo `05_prepare_model_data.py`.
+
+Usa os ficheiros normalizados:
+
+- `X_train_scaled_for_logistic_regression.csv`
+- `X_test_scaled_for_logistic_regression.csv`
+- `y_train.csv`
+- `y_test.csv`
+
+**Objetivo:**  
+Treinar um modelo linear de classificação e avaliar o desempenho no conjunto de
+teste. A normalização é usada porque Logistic Regression é sensível à escala
+das variáveis.
+
+Ficheiros gerados:
+
+- `logistic_regression_metrics.csv`
+- `logistic_regression_feature_importance.csv`
+- `logistic_regression_model.pkl`
+
+Exemplo:
+
+```bash
+python 08_train_logistic_regression.py --input-dir outputs_A/model_ready
+```
+
+---
+
 ## `06_train_random_forest.py` — Treino de Random Forest
 
 Este script treina e avalia um modelo Random Forest a partir dos ficheiros
