@@ -1,2 +1,2 @@
 model,train_rows,test_rows,features,c,max_iter,balanced_class_weight,accuracy,roc_auc,f1,precision,recall
-logistic_regression,400,100,35,1.0,1000,True,0.68,0.737,0.6522,0.625,0.6818
+logistic_regression,3500,1500,35,1.0,1000,True,0.6533,0.6787,0.5853,0.5734,0.5977

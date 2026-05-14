@@ -1,7 +1,7 @@
 01. DATA VALIDATION REPORT
 
-File: dataset_A_causality_likely_contacts_train.csv
-Rows: 500
+File: model_preparation_scripts/datasets_A_B_C_large/dataset_A_causality_likely_contacts_train.csv
+Rows: 5000
 Columns: 14
 
 Missing columns: []
