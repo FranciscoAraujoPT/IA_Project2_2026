@@ -17,7 +17,7 @@ import { useAppState } from './hooks/useAppState';
 import * as api from './lib/api';
 import type {
   Dataset, JoinRule, ChainStep, ProjectConfig,
-  ModelMetrics, StatBucket, FeatureImportance, ColumnMeta,
+  ModelMetrics, StatBucket, FeatureImportance, ColumnMeta, KFoldMetrics,
 } from './lib/types';
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
@@ -303,6 +303,14 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
   onUpload: () => void;
 }) {
   const avgRate = stats.length ? stats.reduce((a, s) => a + s.purchaseRate, 0) / stats.filter(s => s.total > 0).length : 0;
+  const [kfold, setKfold] = useState<KFoldMetrics | null>(null);
+
+  useEffect(() => {
+    if (!metrics.trained) return;
+    api.getKFoldMetrics()
+      .then(m => setKfold('k' in m ? m as KFoldMetrics : null))
+      .catch(() => {});
+  }, [metrics.trained, metrics.samples, config?.k_folds]);
 
   return (
     <>
@@ -326,10 +334,26 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
         <div className="p-8 flex-1 grid grid-cols-1 md:grid-cols-12 gap-6 content-start">
           <div className="md:col-span-12 grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
-              { label: 'AUC-ROC', value: metrics.roc_auc?.toFixed(4) ?? '—', sub: 'model performance' },
-              { label: 'Accuracy', value: metrics.accuracy ? `${(metrics.accuracy * 100).toFixed(1)}%` : '—', sub: 'training set' },
-              { label: 'Avg Outcome Rate', value: `${(avgRate * 100).toFixed(1)}%`, sub: `"${config.outcome_col}" = 1` },
-              { label: 'Features', value: metrics.features ?? '—', sub: 'after chain' },
+              {
+                label: 'AUC-ROC',
+                value: kfold ? kfold.roc_auc.mean.toFixed(4) : (metrics.roc_auc?.toFixed(4) ?? '—'),
+                sub: kfold ? `±${kfold.roc_auc.std.toFixed(4)} · ${kfold.k}-Fold CV` : 'aguarda treino',
+              },
+              {
+                label: 'Accuracy',
+                value: kfold ? `${(kfold.accuracy.mean * 100).toFixed(1)}%` : (metrics.accuracy ? `${(metrics.accuracy * 100).toFixed(1)}%` : '—'),
+                sub: kfold ? `±${(kfold.accuracy.std * 100).toFixed(1)}pp · ${kfold.k}-Fold CV` : 'aguarda treino',
+              },
+              {
+                label: 'Avg Outcome Rate',
+                value: `${(avgRate * 100).toFixed(1)}%`,
+                sub: `"${config.outcome_col}" = 1`,
+              },
+              {
+                label: 'Features',
+                value: metrics.features ?? '—',
+                sub: 'após chain',
+              },
             ].map(k => (
               <Card key={k.label} title={k.label} icon={<Activity className="w-4 h-4" />}>
                 <div className="text-2xl font-mono font-bold truncate">{k.value}</div>
@@ -381,15 +405,61 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
           {metrics.trained && (
             <div className="md:col-span-12 grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
-                { label: 'F1 Score', value: metrics.f1?.toFixed(4) ?? '—' },
-                { label: 'Precision', value: metrics.precision?.toFixed(4) ?? '—' },
-                { label: 'Recall', value: metrics.recall?.toFixed(4) ?? '—' },
-                { label: 'Positive Rate', value: metrics.positive_rate ? `${(metrics.positive_rate * 100).toFixed(1)}%` : '—' },
+                {
+                  label: 'F1 Score',
+                  value: kfold ? kfold.f1.mean.toFixed(4) : (metrics.f1?.toFixed(4) ?? '—'),
+                  sub: kfold ? `±${kfold.f1.std.toFixed(4)}` : '',
+                },
+                {
+                  label: 'Precision',
+                  value: kfold ? kfold.precision.mean.toFixed(4) : (metrics.precision?.toFixed(4) ?? '—'),
+                  sub: kfold ? `±${kfold.precision.std.toFixed(4)}` : '',
+                },
+                {
+                  label: 'Recall',
+                  value: kfold ? kfold.recall.mean.toFixed(4) : (metrics.recall?.toFixed(4) ?? '—'),
+                  sub: kfold ? `±${kfold.recall.std.toFixed(4)}` : '',
+                },
+                {
+                  label: 'Positive Rate',
+                  value: metrics.positive_rate ? `${(metrics.positive_rate * 100).toFixed(1)}%` : '—',
+                  sub: 'base de dados',
+                },
               ].map(k => (
                 <Card key={k.label} title={k.label} icon={<Activity className="w-4 h-4" />}>
                   <div className="text-xl font-mono font-bold">{k.value}</div>
+                  {k.sub && <p className="text-[10px] opacity-40 font-mono mt-1">{k.sub}</p>}
                 </Card>
               ))}
+            </div>
+          )}
+
+          {/* AUC por fold — compact bar chart */}
+          {kfold && kfold.fold_aucs?.length > 0 && (
+            <div className="md:col-span-12 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <BrainCircuit className="w-4 h-4 text-indigo-500" />
+                  <h3 className="text-sm font-bold text-slate-700">AUC por Fold</h3>
+                  <Badge color="indigo">{kfold.k}-Fold CV</Badge>
+                </div>
+                <p className="text-[10px] text-slate-400 font-mono">
+                  média {kfold.roc_auc.mean.toFixed(4)} ± {kfold.roc_auc.std.toFixed(4)}
+                </p>
+              </div>
+              <ResponsiveContainer width="100%" height={110}>
+                <BarChart
+                  data={kfold.fold_aucs.map((v, i) => ({ fold: `F${i + 1}`, auc: v }))}
+                  margin={{ top: 4, right: 10, left: -10, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                  <XAxis dataKey="fold" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis domain={[0, 1]} tick={{ fontSize: 9 }} tickFormatter={v => v.toFixed(2)} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    formatter={(v: any) => [Number(v).toFixed(4), 'AUC']}
+                    contentStyle={{ borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 10 }} />
+                  <Bar dataKey="auc" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           )}
         </div>
@@ -400,41 +470,48 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
 
 // ── Predictions Page ──────────────────────────────────────────────────────────
 
-type SimMode = 'single' | 'sweep';
+type PredMode = 'manual' | 'testdb' | 'sweep';
 
-function PredictionsPage({ config, datasets }: { config: ProjectConfig | null; datasets: Dataset[] }) {
-  const [featureCols, setFeatureCols] = useState<import('./lib/types').ColumnMeta[]>([]);
+function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; onRefresh: () => void }) {
+  const [featureCols, setFeatureCols] = useState<ColumnMeta[]>([]);
 
-  // Load chain input columns (raw source cols the chain reads from)
   useEffect(() => {
     if (!config?.outcome_col) return;
-    api.getPredictInputs().then(cols => setFeatureCols(cols)).catch(() => { });
+    api.getPredictInputs().then(cols => setFeatureCols(cols)).catch(() => {});
   }, [config?.outcome_col]);
 
-  // Mode: single prediction vs sweep
-  const [mode, setMode] = useState<SimMode>('single');
+  const [mode, setMode] = useState<PredMode>('manual');
+  const [threshold, setThreshold] = useState(0.5);
 
-  // ── Shared baseline values for all features ────────────────────────────────
+  // ── Shared baseline values ─────────────────────────────────────────────────
   const [baseValues, setBaseValues] = useState<Record<string, any>>({});
-  // Features the user has toggled OFF — they use their neutral midpoint so the model
-  // still gets a value, but the user is effectively saying "don't vary this"
   const [ignoredFeatures, setIgnoredFeatures] = useState<Set<string>>(new Set());
   const [sweepFeature, setSweepFeature] = useState<string>('');
 
-  // Single mode state
+  // ── Manual mode state ─────────────────────────────────────────────────────
   const [prediction, setPrediction] = useState<number | null>(null);
   const [predicting, setPredicting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<{ input: Record<string, any>; result: number; label: string }[]>([]);
 
-  // Sweep mode state
+  // ── Sweep mode state ──────────────────────────────────────────────────────
   const [sweepResults, setSweepResults] = useState<{ x: number | string; prob: number }[]>([]);
   const [sweeping, setSweeping] = useState(false);
   const [sweepError, setSweepError] = useState<string | null>(null);
   const [sweepSteps, setSweepSteps] = useState(20);
   const [currentProb, setCurrentProb] = useState<number | null>(null);
 
-  // Neutral values for ignored features — use actual mean if available, else midpoint
+  // ── Test DB mode state (K-Fold) ───────────────────────────────────────────
+  const [kfoldRows, setKfoldRows] = useState<Record<string, any>[]>([]);
+  const [kfoldOutcomeCol, setKfoldOutcomeCol] = useState('');
+  const [kfoldPct, setKfoldPct] = useState(0.30);
+  const [kfoldTotal, setKfoldTotal] = useState(0);
+  const [kfoldK, setKfoldK] = useState(0);
+  const [localK, setLocalK] = useState(config?.k_folds ?? 5);
+  const [loadingRows, setLoadingRows] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+
+  // Neutral midpoint values for ignored features
   const neutralValues = React.useMemo(() => {
     const n: Record<string, any> = {};
     featureCols.forEach(col => {
@@ -450,15 +527,12 @@ function PredictionsPage({ config, datasets }: { config: ProjectConfig | null; d
     return n;
   }, [featureCols.map(c => c.name).join(',')]);
 
-  // Build prediction row: ignored features get neutral value, active ones get baseValues
   const buildRow = (overrides: Record<string, any> = {}) => {
     const row: Record<string, any> = {};
     featureCols.forEach(col => {
-      if (ignoredFeatures.has(col.name)) {
-        row[col.name] = neutralValues[col.name];
-      } else {
-        row[col.name] = baseValues[col.name];
-      }
+      row[col.name] = ignoredFeatures.has(col.name)
+        ? neutralValues[col.name]
+        : baseValues[col.name];
     });
     return { ...row, ...overrides };
   };
@@ -473,7 +547,6 @@ function PredictionsPage({ config, datasets }: { config: ProjectConfig | null; d
     setSweepResults([]);
   };
 
-  // Initialise baseline values when featureCols load
   useEffect(() => {
     if (!featureCols.length) return;
     const init: Record<string, any> = {};
@@ -495,7 +568,7 @@ function PredictionsPage({ config, datasets }: { config: ProjectConfig | null; d
     if (firstNum) setSweepFeature(firstNum.name);
   }, [featureCols.map(c => c.name).join(',')]);
 
-  // ── Single prediction ──────────────────────────────────────────────────────
+  // ── Manual prediction ──────────────────────────────────────────────────────
   const handlePredict = async () => {
     setPredicting(true); setError(null);
     try {
@@ -503,27 +576,26 @@ function PredictionsPage({ config, datasets }: { config: ProjectConfig | null; d
       const d = await api.predict(row);
       setPrediction(d.probability);
       const activeEntries = Object.entries(row).filter(([k]) => !ignoredFeatures.has(k));
-      const label = activeEntries.slice(0, 2).map(([k, v]) => `${k.replace(/_/g, ' ')}=${typeof v === 'number' ? Number(v).toFixed(1) : v}`).join(', ');
+      const label = activeEntries.slice(0, 2)
+        .map(([k, v]) => `${k.replace(/_/g, ' ')}=${typeof v === 'number' ? Number(v).toFixed(1) : v}`)
+        .join(', ');
       setHistory(prev => [{ input: row, result: d.probability, label }, ...prev].slice(0, 8));
     } catch (err: any) { setError(err.message); }
     finally { setPredicting(false); }
   };
 
-  // ── Sweep simulation ───────────────────────────────────────────────────────
+  // ── Sweep ──────────────────────────────────────────────────────────────────
   const handleSweep = async () => {
     const col = featureCols.find(c => c.name === sweepFeature);
     if (!col) return;
     setSweeping(true); setSweepError(null); setSweepResults([]); setCurrentProb(null);
-
     try {
       let points: { x: number | string; prob: number }[] = [];
-
       if (col.type === 'numeric') {
         const min = col.min ?? 0;
         const max = col.max ?? 100;
         const step = (max - min) / sweepSteps;
         const xs = Array.from({ length: sweepSteps + 1 }, (_, i) => parseFloat((min + i * step).toFixed(2)));
-
         for (const x of xs) {
           const row = buildRow({ [sweepFeature]: x });
           const d = await api.predict(row);
@@ -539,19 +611,56 @@ function PredictionsPage({ config, datasets }: { config: ProjectConfig | null; d
           setSweepResults([...points]);
         }
       }
-
-      // Baseline probability with current ignored set
       const base = await api.predict(buildRow());
       setCurrentProb(base.probability);
     } catch (err: any) { setSweepError(err.message); }
     finally { setSweeping(false); }
   };
 
+  // ── K-Fold Test DB ─────────────────────────────────────────────────────────
+  const loadKFoldSample = async () => {
+    setLoadingRows(true); setTestError(null);
+    try {
+      if (config && localK !== (config.k_folds ?? 5)) {
+        await api.setConfig({ ...config, k_folds: localK });
+        await new Promise(r => setTimeout(r, 600));
+        onRefresh();
+      }
+      const resp = await api.getKFoldSample(kfoldPct, threshold);
+      setKfoldRows(resp.rows);
+      setKfoldOutcomeCol(resp.outcome_col);
+      setKfoldTotal(resp.total);
+      setKfoldK(resp.k);
+    } catch (e: any) { setTestError(e.message); }
+    setLoadingRows(false);
+  };
+
+  // Recompute predicted/correct client-side when threshold changes (avoids refetch)
+  const computedRows = kfoldRows.map(row => ({
+    ...row,
+    _predicted_now: (row._prob as number) >= threshold ? 1 : 0,
+    _correct_now: (row._real as number) === ((row._prob as number) >= threshold ? 1 : 0),
+  }));
+  const correctCount = computedRows.filter(r => r._correct_now).length;
+  const testAccuracy = computedRows.length > 0 ? correctCount / computedRows.length : null;
+  const featureColNames = kfoldRows.length > 0
+    ? Object.keys(kfoldRows[0]).filter(k => !k.startsWith('_'))
+    : [];
+  const foldBreakdown = computedRows.reduce((acc, row) => {
+    const f = row._fold as number;
+    if (!acc[f]) acc[f] = { total: 0, correct: 0 };
+    acc[f].total++;
+    if (row._correct_now) acc[f].correct++;
+    return acc;
+  }, {} as Record<number, { total: number; correct: number }>);
+
   const sweepCol = featureCols.find(c => c.name === sweepFeature);
   const activeCount = featureCols.length - ignoredFeatures.size;
   const prob = prediction ?? 0;
-  const probColor = (p: number) => p > 0.6 ? 'text-emerald-500' : p > 0.35 ? 'text-amber-500' : 'text-rose-500';
-  const probBg = (p: number) => p > 0.6 ? 'bg-emerald-500' : p > 0.35 ? 'bg-amber-500' : 'bg-rose-500';
+  const probColor = (p: number) => p >= threshold ? 'text-emerald-500' : 'text-rose-500';
+  const probBg = (p: number) => p >= threshold ? 'bg-emerald-500' : 'bg-rose-500';
+  const probMid = (p: number) => p > 0.6 ? 'text-emerald-500' : p > 0.35 ? 'text-amber-500' : 'text-rose-500';
+  const probMidBg = (p: number) => p > 0.6 ? 'bg-emerald-500' : p > 0.35 ? 'bg-amber-500' : 'bg-rose-500';
 
   if (!config?.outcome_col) return (
     <div className="flex-1 flex flex-col items-center justify-center gap-4 text-slate-300">
@@ -564,396 +673,619 @@ function PredictionsPage({ config, datasets }: { config: ProjectConfig | null; d
     <>
       <header className="h-20 bg-white border-b border-slate-200 px-8 flex items-center justify-between shadow-sm sticky top-0 z-10">
         <div>
-          <h1 className="text-xl font-bold text-slate-800">Scenario Simulator</h1>
+          <h1 className="text-xl font-bold text-slate-800">Predictions</h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Predicting <span className="font-semibold text-indigo-600">{config.outcome_col}</span> · <span className="font-semibold text-slate-600">{activeCount}</span>/{featureCols.length} features active
+            Objetivo: <span className="font-semibold text-indigo-600">{config.outcome_col}</span>
+            {mode !== 'testdb' && (
+              <> · <span className="font-semibold text-slate-600">{activeCount}</span>/{featureCols.length} features activas</>
+            )}
           </p>
         </div>
-        {/* Mode toggle */}
         <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
-          <button onClick={() => setMode('single')}
-            className={cn('px-4 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'single' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
-            <span className="flex items-center gap-1.5"><Zap className="w-3.5 h-3.5" />Single</span>
+          <button onClick={() => setMode('manual')}
+            className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'manual' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+            <span className="flex items-center gap-1.5"><Zap className="w-3.5 h-3.5" />Manual</span>
+          </button>
+          <button onClick={() => setMode('testdb')}
+            className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'testdb' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+            <span className="flex items-center gap-1.5"><Database className="w-3.5 h-3.5" />Testar BD</span>
           </button>
           <button onClick={() => setMode('sweep')}
-            className={cn('px-4 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'sweep' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+            className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'sweep' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
             <span className="flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" />Sweep</span>
           </button>
         </div>
       </header>
 
-      <div className="p-8 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 content-start">
+      {/* ── TEST DB MODE — K-Fold, full width ── */}
+      {mode === 'testdb' && (
+        <div className="p-8 flex-1 flex flex-col gap-6">
 
-        {/* ── Left panel: feature controls ── */}
-        <div className="lg:col-span-4 flex flex-col gap-4">
-          <div className="bg-indigo-600 rounded-3xl p-6 text-white shadow-lg flex flex-col gap-4">
-            <div>
-              <h2 className="text-base font-bold">
-                {mode === 'sweep' ? 'Baseline & Context' : 'Feature Inputs'}
-              </h2>
-              <p className="text-indigo-200 text-[11px] mt-0.5">
-                Toggle features off to ignore them — they'll use a neutral midpoint value.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-indigo-200 font-semibold">
-                {activeCount} of {featureCols.length} active
-              </span>
-              {ignoredFeatures.size === featureCols.length ? (
-                <button onClick={() => setIgnoredFeatures(new Set())}
-                  className="text-[9px] text-indigo-300 hover:text-white underline">
-                  enable all
-                </button>
-              ) : ignoredFeatures.size > 0 ? (
-                <div className="flex gap-2">
-                  <button onClick={() => setIgnoredFeatures(new Set())}
-                    className="text-[9px] text-indigo-300 hover:text-white underline">
-                    enable all
-                  </button>
-                  <span className="text-indigo-400">·</span>
-                  <button onClick={() => setIgnoredFeatures(new Set(featureCols.map(c => c.name)))}
-                    className="text-[9px] text-indigo-300 hover:text-white underline">
-                    disable all
-                  </button>
+          {/* Controls */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+            <div className="flex items-center gap-6 flex-wrap">
+              {/* Percentage slider */}
+              <div className="flex-1 min-w-[200px]">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Amostra da BD
+                  </label>
+                  <span className="text-sm font-black text-indigo-600">
+                    {Math.round(kfoldPct * 100)}%
+                    {kfoldTotal > 0 && (
+                      <span className="text-xs font-normal text-slate-400 ml-1">
+                        ({Math.round(kfoldTotal * kfoldPct)} / {kfoldTotal} linhas)
+                      </span>
+                    )}
+                  </span>
                 </div>
-              ) : (
-                <button onClick={() => setIgnoredFeatures(new Set(featureCols.map(c => c.name)))}
-                  className="text-[9px] text-indigo-300 hover:text-white underline">
-                  disable all
-                </button>
+                <input type="range" min={5} max={100} step={5}
+                  className="w-full h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer accent-indigo-600"
+                  value={Math.round(kfoldPct * 100)}
+                  onChange={e => setKfoldPct(+e.target.value / 100)} />
+                <div className="flex justify-between text-[9px] font-mono text-slate-300 mt-1">
+                  <span>5%</span><span>50%</span><span>100%</span>
+                </div>
+              </div>
+
+              {/* K folds selector */}
+              <div className="shrink-0">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nº de Folds</label>
+                  <span className="text-sm font-black text-indigo-600 ml-2">{localK}</span>
+                </div>
+                <input type="range" min={2} max={20} step={1}
+                  className="w-32 h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer accent-indigo-600"
+                  value={localK}
+                  onChange={e => setLocalK(+e.target.value)} />
+                <div className="flex justify-between text-[9px] font-mono text-slate-300 mt-0.5">
+                  <span>2</span><span>20</span>
+                </div>
+              </div>
+
+              {/* Threshold */}
+              <div className="flex items-center gap-2 shrink-0">
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Threshold</label>
+                <input type="number" min={0} max={1} step={0.05}
+                  className="w-20 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  value={threshold} onChange={e => setThreshold(parseFloat(e.target.value) || 0.5)} />
+              </div>
+
+              {/* Load button */}
+              <button onClick={loadKFoldSample} disabled={loadingRows}
+                className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 disabled:opacity-50 transition-colors shrink-0">
+                {loadingRows
+                  ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  : <BrainCircuit className="w-3.5 h-3.5" />}
+                {localK !== (config.k_folds ?? 5)
+                  ? `Aplicar ${localK}-Fold & Carregar`
+                  : kfoldK > 0 ? `Recarregar (${kfoldK}-Fold CV)` : `Carregar ${localK}-Fold CV`}
+              </button>
+            </div>
+            {testError && <p className="text-rose-500 text-xs mt-3">{testError}</p>}
+          </div>
+
+          {/* Summary cards */}
+          {testAccuracy !== null && (
+            <div className="grid grid-cols-4 gap-4">
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm text-center">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Acertos</p>
+                <p className="text-3xl font-black text-emerald-500">{correctCount}</p>
+                <p className="text-xs text-slate-400 mt-1">de {computedRows.length}</p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm text-center">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Precisão</p>
+                <p className="text-3xl font-black text-indigo-600">{(testAccuracy * 100).toFixed(1)}%</p>
+                <p className="text-xs text-slate-400 mt-1">nesta amostra</p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm text-center">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Erros</p>
+                <p className="text-3xl font-black text-rose-500">{computedRows.length - correctCount}</p>
+                <p className="text-xs text-slate-400 mt-1">de {computedRows.length}</p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm text-center">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Folds</p>
+                <p className="text-3xl font-black text-slate-700">{kfoldK}</p>
+                <p className="text-xs text-slate-400 mt-1">CV estratificado</p>
+              </div>
+            </div>
+          )}
+
+          {/* Per-fold breakdown */}
+          {Object.keys(foldBreakdown).length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-4">Resultado por Fold</p>
+              <div className="flex gap-3 flex-wrap">
+                {Object.entries(foldBreakdown)
+                  .sort(([a], [b]) => +a - +b)
+                  .map(([fold, stats]) => {
+                    const acc = stats.correct / stats.total;
+                    return (
+                      <div key={fold} className={cn(
+                        'flex-1 min-w-[80px] rounded-xl p-3 border text-center',
+                        acc >= 0.7 ? 'bg-emerald-50 border-emerald-200' :
+                          acc >= 0.5 ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200'
+                      )}>
+                        <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400 mb-1">Fold {fold}</p>
+                        <p className={cn('text-lg font-black',
+                          acc >= 0.7 ? 'text-emerald-600' : acc >= 0.5 ? 'text-amber-600' : 'text-rose-600')}>
+                          {(acc * 100).toFixed(0)}%
+                        </p>
+                        <p className="text-[10px] text-slate-400">{stats.correct}/{stats.total}</p>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* Results table */}
+          {computedRows.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-3 py-3 text-left font-bold text-indigo-500 uppercase tracking-wider">Fold</th>
+                      {featureColNames.slice(0, 4).map(c => (
+                        <th key={c} className="px-3 py-3 text-left font-bold text-slate-500 uppercase tracking-wider max-w-[90px]">
+                          <span className="truncate block">{c.replace(/_/g, ' ')}</span>
+                        </th>
+                      ))}
+                      <th className="px-3 py-3 text-left font-bold text-emerald-600 uppercase tracking-wider">Real</th>
+                      <th className="px-3 py-3 text-left font-bold text-indigo-600 uppercase tracking-wider">Previsto</th>
+                      <th className="px-3 py-3 text-left font-bold text-slate-500 uppercase tracking-wider">Prob.</th>
+                      <th className="px-3 py-3 text-left font-bold text-slate-500 uppercase tracking-wider">Resultado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {computedRows.map((row, i) => (
+                      <tr key={i} className={cn(
+                        'hover:bg-slate-50 transition-colors',
+                        !row._correct_now && 'bg-rose-50/30',
+                        row._correct_now && 'bg-emerald-50/10',
+                      )}>
+                        <td className="px-3 py-2.5">
+                          <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full font-bold text-[10px]">
+                            F{row._fold}
+                          </span>
+                        </td>
+                        {featureColNames.slice(0, 4).map(c => (
+                          <td key={c} className="px-3 py-2.5 text-slate-600 font-mono max-w-[90px]">
+                            <span className="truncate block">
+                              {typeof row[c] === 'number' ? Number(row[c]).toFixed(2) : String(row[c] ?? '—')}
+                            </span>
+                          </td>
+                        ))}
+                        <td className="px-3 py-2.5">
+                          <span className={cn('px-2 py-0.5 rounded-full font-bold text-[10px]',
+                            row._real === 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500')}>
+                            {row._real === 1 ? 'Sim' : 'Não'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className={cn('px-2 py-0.5 rounded-full font-bold text-[10px]',
+                            row._predicted_now === 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500')}>
+                            {row._predicted_now === 1 ? 'Sim' : 'Não'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 font-mono">
+                          <span className={(row._prob as number) >= threshold ? 'text-emerald-600 font-bold' : 'text-rose-500 font-bold'}>
+                            {((row._prob as number) * 100).toFixed(1)}%
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {row._correct_now
+                            ? <span className="flex items-center gap-1 text-emerald-600 font-bold"><CheckCircle2 className="w-3.5 h-3.5" />Correto</span>
+                            : <span className="flex items-center gap-1 text-rose-500 font-bold"><AlertCircle className="w-3.5 h-3.5" />Errado</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {kfoldRows.length === 0 && !loadingRows && (
+            <div className="flex flex-col items-center justify-center py-16 text-slate-300 gap-3">
+              <BrainCircuit className="w-12 h-12" />
+              <p className="font-semibold">Clique em "Carregar K-Fold CV" para começar</p>
+              <p className="text-xs">Cada linha foi prevista pelo modelo treinado sem ela (hold-out fold)</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── MANUAL & SWEEP MODES — 2-col layout ── */}
+      {mode !== 'testdb' && (
+        <div className="p-8 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 content-start">
+
+          {/* Left panel: feature controls */}
+          <div className="lg:col-span-4 flex flex-col gap-4">
+            <div className="bg-indigo-600 rounded-3xl p-6 text-white shadow-lg flex flex-col gap-4">
+              <div>
+                <h2 className="text-base font-bold">
+                  {mode === 'sweep' ? 'Baseline & Contexto' : 'Inputs da Pessoa'}
+                </h2>
+                <p className="text-indigo-200 text-[11px] mt-0.5">
+                  Desative features para usar o valor neutro (média).
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-indigo-200 font-semibold">
+                  {activeCount} de {featureCols.length} activas
+                </span>
+                {ignoredFeatures.size === featureCols.length ? (
+                  <button onClick={() => setIgnoredFeatures(new Set())}
+                    className="text-[9px] text-indigo-300 hover:text-white underline">enable all</button>
+                ) : ignoredFeatures.size > 0 ? (
+                  <div className="flex gap-2">
+                    <button onClick={() => setIgnoredFeatures(new Set())}
+                      className="text-[9px] text-indigo-300 hover:text-white underline">enable all</button>
+                    <span className="text-indigo-400">·</span>
+                    <button onClick={() => setIgnoredFeatures(new Set(featureCols.map(c => c.name)))}
+                      className="text-[9px] text-indigo-300 hover:text-white underline">disable all</button>
+                  </div>
+                ) : (
+                  <button onClick={() => setIgnoredFeatures(new Set(featureCols.map(c => c.name)))}
+                    className="text-[9px] text-indigo-300 hover:text-white underline">disable all</button>
+                )}
+              </div>
+
+              <div className="space-y-2 max-h-[52vh] overflow-y-auto pr-1">
+                {featureCols.map(col => {
+                  const isSweepAxis = mode === 'sweep' && col.name === sweepFeature;
+                  const isIgnored = ignoredFeatures.has(col.name);
+                  return (
+                    <div key={col.name} className={cn(
+                      'rounded-2xl p-3 transition-all',
+                      isSweepAxis ? 'bg-white/5 border border-indigo-300/30' :
+                        isIgnored ? 'bg-white/5 opacity-50' : 'bg-white/10'
+                    )}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={cn(
+                          'text-[10px] font-bold uppercase tracking-wider truncate max-w-[130px]',
+                          isIgnored ? 'text-indigo-300 line-through' : 'text-indigo-100'
+                        )}>
+                          {col.name.replace(/_/g, ' ')}
+                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {isSweepAxis ? (
+                            <span className="text-[9px] bg-white/20 text-white px-2 py-0.5 rounded-full font-bold">AXIS</span>
+                          ) : (
+                            <>
+                              {!isIgnored && col.type === 'numeric' && (
+                                <span className="text-white font-mono text-[10px]">
+                                  {Number(baseValues[col.name] ?? 0).toFixed(1)}
+                                </span>
+                              )}
+                              <button
+                                onClick={() => toggleIgnore(col.name)}
+                                title={isIgnored ? 'Ativar' : 'Ignorar'}
+                                className={cn(
+                                  'w-6 h-3.5 rounded-full transition-all relative shrink-0',
+                                  isIgnored ? 'bg-white/20' : 'bg-white/50'
+                                )}>
+                                <span className={cn(
+                                  'absolute top-0.5 w-2.5 h-2.5 rounded-full transition-all',
+                                  isIgnored ? 'left-0.5 bg-indigo-300' : 'left-3 bg-white'
+                                )} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {!isSweepAxis && !isIgnored && (
+                        col.type === 'numeric' ? (
+                          <input type="range"
+                            min={col.min ?? 0} max={col.max ?? 100}
+                            step={Math.max(0.01, ((col.max ?? 100) - (col.min ?? 0)) / 100)}
+                            className="w-full h-1.5 bg-indigo-400/30 rounded-full appearance-none cursor-pointer mt-1"
+                            value={baseValues[col.name] ?? 0}
+                            onChange={e => setBaseValues(v => ({ ...v, [col.name]: parseFloat(e.target.value) }))} />
+                        ) : (
+                          <select
+                            className="w-full bg-white/10 border border-white/20 rounded-xl px-2 py-1.5 text-xs focus:outline-none mt-1"
+                            value={baseValues[col.name] ?? ''}
+                            onChange={e => setBaseValues(v => ({ ...v, [col.name]: e.target.value }))}>
+                            {col.uniqueValues?.map(v => <option key={v} value={v} className="text-slate-800">{v}</option>)}
+                          </select>
+                        )
+                      )}
+                      {isIgnored && !isSweepAxis && (
+                        <p className="text-[9px] text-indigo-300/70 mt-0.5 italic">valor neutro · ative para definir</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {mode === 'manual' && (
+                <>
+                  {error && <p className="text-rose-200 text-xs">{error}</p>}
+                  <button onClick={handlePredict} disabled={predicting}
+                    className="w-full bg-white text-indigo-600 py-3.5 rounded-2xl font-bold text-sm shadow-xl active:scale-[0.98] transition-all disabled:opacity-50">
+                    {predicting
+                      ? <span className="flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" />A calcular…</span>
+                      : <span className="flex items-center justify-center gap-2"><Zap className="w-4 h-4" />Prever</span>}
+                  </button>
+                </>
               )}
             </div>
+          </div>
 
-            <div className="space-y-2 max-h-[52vh] overflow-y-auto pr-1">
-              {featureCols.map(col => {
-                const isSweepAxis = mode === 'sweep' && col.name === sweepFeature;
-                const isIgnored = ignoredFeatures.has(col.name);
-                return (
-                  <div key={col.name} className={cn(
-                    'rounded-2xl p-3 transition-all',
-                    isSweepAxis ? 'bg-white/5 border border-indigo-300/30' :
-                      isIgnored ? 'bg-white/5 opacity-50' : 'bg-white/10'
-                  )}>
-                    {/* Header row: name + badge/toggle */}
-                    <div className="flex items-center justify-between mb-1">
-                      <span className={cn(
-                        'text-[10px] font-bold uppercase tracking-wider truncate max-w-[130px]',
-                        isIgnored ? 'text-indigo-300 line-through' : 'text-indigo-100'
-                      )}>
-                        {col.name.replace(/_/g, ' ')}
-                      </span>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {isSweepAxis ? (
-                          <span className="text-[9px] bg-white/20 text-white px-2 py-0.5 rounded-full font-bold">AXIS</span>
-                        ) : (
-                          <>
-                            {!isIgnored && col.type === 'numeric' && (
-                              <span className="text-white font-mono text-[10px]">
-                                {Number(baseValues[col.name] ?? 0).toFixed(1)}
-                              </span>
-                            )}
-                            <button
-                              onClick={() => toggleIgnore(col.name)}
-                              title={isIgnored ? 'Enable this feature' : 'Ignore this feature'}
-                              className={cn(
-                                'w-6 h-3.5 rounded-full transition-all relative shrink-0',
-                                isIgnored ? 'bg-white/20' : 'bg-white/50'
-                              )}>
-                              <span className={cn(
-                                'absolute top-0.5 w-2.5 h-2.5 rounded-full transition-all',
-                                isIgnored ? 'left-0.5 bg-indigo-300' : 'left-3 bg-white'
-                              )} />
-                            </button>
-                          </>
-                        )}
-                      </div>
+          {/* Right panel */}
+          <div className="lg:col-span-8 flex flex-col gap-6">
+
+            {/* ── MANUAL MODE ── */}
+            {mode === 'manual' && (
+              <>
+                <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm">
+                  <h3 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-6">
+                    Resultado — {config.outcome_col}
+                  </h3>
+                  {prediction === null ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-slate-300">
+                      <BrainCircuit className="w-12 h-12 mb-4" />
+                      <p className="text-sm font-semibold">Configure os inputs e clique em Prever</p>
                     </div>
-                    {/* Control: only shown when active and not sweep axis */}
-                    {!isSweepAxis && !isIgnored && (
-                      col.type === 'numeric' ? (
-                        <input type="range"
-                          min={col.min ?? 0} max={col.max ?? 100}
-                          step={Math.max(0.01, ((col.max ?? 100) - (col.min ?? 0)) / 100)}
-                          className="w-full h-1.5 bg-indigo-400/30 rounded-full appearance-none cursor-pointer mt-1"
-                          value={baseValues[col.name] ?? 0}
-                          onChange={e => setBaseValues(v => ({ ...v, [col.name]: parseFloat(e.target.value) }))} />
-                      ) : (
-                        <select
-                          className="w-full bg-white/10 border border-white/20 rounded-xl px-2 py-1.5 text-xs focus:outline-none mt-1"
-                          value={baseValues[col.name] ?? ''}
-                          onChange={e => setBaseValues(v => ({ ...v, [col.name]: e.target.value }))}>
-                          {col.uniqueValues?.map(v => <option key={v} value={v} className="text-slate-800">{v}</option>)}
-                        </select>
-                      )
-                    )}
-                    {/* Ignored state hint */}
-                    {isIgnored && !isSweepAxis && (
-                      <p className="text-[9px] text-indigo-300/70 mt-0.5 italic">
-                        using neutral value · toggle to set manually
-                      </p>
+                  ) : (
+                    <AnimatePresence mode="wait">
+                      <motion.div key={prediction} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+                        <div className="flex items-end gap-4">
+                          <div className={cn('text-7xl font-black tabular-nums', probColor(prob))}>
+                            {(prob * 100).toFixed(1)}
+                          </div>
+                          <div className="pb-2">
+                            <p className="text-2xl font-black text-slate-300">%</p>
+                            <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">P({config.outcome_col} = 1)</p>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                            <motion.div className={cn('h-full rounded-full', probBg(prob))}
+                              initial={{ width: 0 }} animate={{ width: `${prob * 100}%` }} transition={{ duration: 0.6, ease: 'easeOut' }} />
+                          </div>
+                          <div className="flex justify-between text-[9px] font-mono text-slate-300">
+                            <span>0%</span>
+                            <span className="text-indigo-300">Threshold: {(threshold * 100).toFixed(0)}%</span>
+                            <span>100%</span>
+                          </div>
+                        </div>
+
+                        {/* Verdict */}
+                        <div className={cn('rounded-2xl px-5 py-5 flex items-center gap-4',
+                          prob >= threshold
+                            ? 'bg-emerald-50 border-2 border-emerald-300'
+                            : 'bg-rose-50 border-2 border-rose-300')}>
+                          <div className={cn('w-12 h-12 rounded-xl flex items-center justify-center shrink-0',
+                            prob >= threshold ? 'bg-emerald-500' : 'bg-rose-500')}>
+                            {prob >= threshold
+                              ? <CheckCircle2 className="w-6 h-6 text-white" />
+                              : <AlertCircle className="w-6 h-6 text-white" />}
+                          </div>
+                          <div>
+                            <p className={cn('font-black text-xl', prob >= threshold ? 'text-emerald-700' : 'text-rose-700')}>
+                              {prob >= threshold ? 'Cumpre o Objetivo' : 'Não Cumpre o Objetivo'}
+                            </p>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              {prob >= threshold
+                                ? `Prob. ${(prob * 100).toFixed(1)}% ≥ threshold ${(threshold * 100).toFixed(0)}%`
+                                : `Prob. ${(prob * 100).toFixed(1)}% < threshold ${(threshold * 100).toFixed(0)}%`}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Threshold control */}
+                        <div className="flex items-center gap-3 bg-slate-50 rounded-2xl px-4 py-3">
+                          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0">Threshold</span>
+                          <input type="range" min={0} max={1} step={0.05}
+                            className="flex-1 h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer"
+                            value={threshold}
+                            onChange={e => setThreshold(parseFloat(e.target.value))} />
+                          <span className="text-xs font-mono font-bold text-indigo-600 w-10 text-right">
+                            {(threshold * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      </motion.div>
+                    </AnimatePresence>
+                  )}
+                </div>
+
+                {history.length > 0 && (
+                  <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+                    <h3 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-4">Histórico</h3>
+                    <div className="space-y-2">
+                      {history.map((h, i) => (
+                        <div key={i} className="flex items-center justify-between px-4 py-3 bg-slate-50 rounded-xl gap-3">
+                          <span className="text-xs text-slate-500 truncate">{h.label}</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full',
+                              h.result >= threshold ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-600')}>
+                              {h.result >= threshold ? 'Cumpre' : 'Não Cumpre'}
+                            </span>
+                            <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                              <div className={cn('h-full rounded-full', probMidBg(h.result))} style={{ width: `${h.result * 100}%` }} />
+                            </div>
+                            <span className={cn('text-sm font-black w-12 text-right', probMid(h.result))}>
+                              {(h.result * 100).toFixed(1)}%
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ── SWEEP MODE ── */}
+            {mode === 'sweep' && (
+              <>
+                <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+                  <div className="flex items-center gap-2 mb-5">
+                    <TrendingUp className="w-4 h-4 text-indigo-500" />
+                    <h3 className="text-sm font-bold text-slate-700">Configuração do Sweep</h3>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Feature (eixo X)</label>
+                      <select
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                        value={sweepFeature}
+                        onChange={e => { setSweepFeature(e.target.value); setSweepResults([]); setCurrentProb(null); }}>
+                        {featureCols.map(c => (
+                          <option key={c.name} value={c.name}>{c.name.replace(/_/g, ' ')}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {sweepCol?.type === 'numeric' && (
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                          Resolução ({sweepSteps} steps)
+                        </label>
+                        <input type="range" min={5} max={50} step={5}
+                          className="w-full h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer mt-2"
+                          value={sweepSteps}
+                          onChange={e => setSweepSteps(parseInt(e.target.value))} />
+                        <div className="flex justify-between text-[9px] font-mono text-slate-300 mt-1"><span>5</span><span>50</span></div>
+                      </div>
                     )}
                   </div>
-                );
-              })}
-            </div>
 
-            {mode === 'single' && (
-              <>
-                {error && <p className="text-rose-200 text-xs">{error}</p>}
-                <button onClick={handlePredict} disabled={predicting}
-                  className="w-full bg-white text-indigo-600 py-3.5 rounded-2xl font-bold text-sm shadow-xl active:scale-[0.98] transition-all disabled:opacity-50">
-                  {predicting
-                    ? <span className="flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" />Calculating…</span>
-                    : <span className="flex items-center justify-center gap-2"><Zap className="w-4 h-4" />Run Prediction</span>}
-                </button>
+                  {sweepCol && (
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3 mb-4 text-xs text-indigo-700">
+                      <span className="font-bold">{sweepFeature.replace(/_/g, ' ')}</span>
+                      {sweepCol.type === 'numeric'
+                        ? ` varia de ${sweepCol.min?.toFixed(1)} até ${sweepCol.max?.toFixed(1)} em ${sweepSteps} passos.`
+                        : ` itera sobre ${sweepCol.uniqueValues?.length} valores únicos.`}
+                    </div>
+                  )}
+
+                  {sweepError && <p className="text-rose-500 text-xs mb-3">{sweepError}</p>}
+
+                  <button onClick={handleSweep} disabled={sweeping || !sweepFeature}
+                    className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-bold text-sm shadow-md active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                    {sweeping
+                      ? <><RefreshCw className="w-4 h-4 animate-spin" />A correr… {sweepResults.length}/{sweepCol?.type === 'numeric' ? sweepSteps + 1 : sweepCol?.uniqueValues?.length ?? 0}</>
+                      : <><TrendingUp className="w-4 h-4" />Correr Sweep</>}
+                  </button>
+                </div>
+
+                {(sweepResults.length > 0 || sweeping) && (
+                  <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-5">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-700">
+                          P({config.outcome_col} = 1) vs {sweepFeature.replace(/_/g, ' ')}
+                        </h3>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          Como a probabilidade muda com {sweepFeature.replace(/_/g, ' ')}
+                        </p>
+                      </div>
+                      {currentProb !== null && (
+                        <div className="text-right">
+                          <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Prob. baseline</p>
+                          <p className={cn('text-lg font-black', probMid(currentProb))}>{(currentProb * 100).toFixed(1)}%</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <ResponsiveContainer width="100%" height={260}>
+                      {sweepCol?.type === 'numeric' ? (
+                        <LineChart data={sweepResults} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                          <XAxis dataKey="x" tick={{ fontSize: 10 }} tickFormatter={v => Number(v).toFixed(0)}
+                            label={{ value: sweepFeature.replace(/_/g, ' '), position: 'insideBottom', offset: -2, fontSize: 10, fill: '#94a3b8' }} />
+                          <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} tickFormatter={v => `${v}%`} />
+                          <Tooltip
+                            formatter={(v: any) => [`${Number(v).toFixed(1)}%`, `P(${config.outcome_col}=1)`]}
+                            labelFormatter={v => `${sweepFeature.replace(/_/g, ' ')}: ${Number(v).toFixed(1)}`}
+                            contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 11 }} />
+                          {currentProb !== null && (
+                            <ReferenceLine y={currentProb * 100} stroke="#6366f1" strokeDasharray="5 3"
+                              label={{ value: 'baseline', fill: '#6366f1', fontSize: 9, position: 'insideTopRight' }} />
+                          )}
+                          <Line type="monotone" dataKey="prob" stroke="#6366f1" strokeWidth={2.5}
+                            dot={false} activeDot={{ r: 5, fill: '#6366f1' }} isAnimationActive={false} />
+                        </LineChart>
+                      ) : (
+                        <BarChart data={sweepResults} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                          <XAxis dataKey="x" tick={{ fontSize: 10 }} />
+                          <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} tickFormatter={v => `${v}%`} />
+                          <Tooltip
+                            formatter={(v: any) => [`${Number(v).toFixed(1)}%`, `P(${config.outcome_col}=1)`]}
+                            contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 11 }} />
+                          <Bar dataKey="prob" fill="#6366f1" radius={[6, 6, 0, 0]} isAnimationActive={false} />
+                        </BarChart>
+                      )}
+                    </ResponsiveContainer>
+
+                    {sweepResults.length > 1 && !sweeping && (() => {
+                      const maxPt = sweepResults.reduce((a, b) => a.prob > b.prob ? a : b);
+                      const minPt = sweepResults.reduce((a, b) => a.prob < b.prob ? a : b);
+                      const range = maxPt.prob - minPt.prob;
+                      return (
+                        <div className="mt-5 grid grid-cols-3 gap-3">
+                          <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3">
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 mb-1">Máximo</p>
+                            <p className="text-lg font-black text-emerald-600">{maxPt.prob.toFixed(1)}%</p>
+                            <p className="text-[10px] text-emerald-500">em {sweepFeature.replace(/_/g, ' ')} = {typeof maxPt.x === 'number' ? Number(maxPt.x).toFixed(1) : maxPt.x}</p>
+                          </div>
+                          <div className="bg-rose-50 border border-rose-100 rounded-2xl px-4 py-3">
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-rose-600 mb-1">Mínimo</p>
+                            <p className="text-lg font-black text-rose-600">{minPt.prob.toFixed(1)}%</p>
+                            <p className="text-[10px] text-rose-500">em {sweepFeature.replace(/_/g, ' ')} = {typeof minPt.x === 'number' ? Number(minPt.x).toFixed(1) : minPt.x}</p>
+                          </div>
+                          <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3">
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-600 mb-1">Amplitude</p>
+                            <p className="text-lg font-black text-indigo-600">{range.toFixed(1)}pp</p>
+                            <p className="text-[10px] text-indigo-500">{range > 20 ? 'Alta sensibilidade' : range > 8 ? 'Sensibilidade média' : 'Baixa sensibilidade'}</p>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {sweepResults.length > 1 && !sweeping && sweepCol?.type === 'numeric' && (() => {
+                      const threshold50 = sweepResults.find(r => r.prob >= 50);
+                      const threshold70 = sweepResults.find(r => r.prob >= 70);
+                      return (threshold50 || threshold70) ? (
+                        <div className="mt-4 bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">
+                            <SlidersHorizontal className="w-3 h-3 inline mr-1" />Limiares de Probabilidade
+                          </p>
+                          <div className="space-y-2">
+                            {threshold50 && (
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-slate-600">Probabilidade ≥ <span className="font-bold text-amber-600">50%</span></span>
+                                <span className="text-xs font-mono font-bold text-slate-700">
+                                  {sweepFeature.replace(/_/g, ' ')} ≥ {Number(threshold50.x).toFixed(1)}
+                                </span>
+                              </div>
+                            )}
+                            {threshold70 && (
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-slate-600">Probabilidade ≥ <span className="font-bold text-emerald-600">70%</span></span>
+                                <span className="text-xs font-mono font-bold text-slate-700">
+                                  {sweepFeature.replace(/_/g, ' ')} ≥ {Number(threshold70.x).toFixed(1)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : null;
+                    })()}
+                  </div>
+                )}
               </>
             )}
           </div>
         </div>
-
-        {/* ── Right panel ── */}
-        <div className="lg:col-span-8 flex flex-col gap-6">
-
-          {/* ── SINGLE MODE ── */}
-          {mode === 'single' && (
-            <>
-              <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm">
-                <h3 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-6">
-                  Prediction Output — {config.outcome_col}
-                </h3>
-                {prediction === null ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-slate-300">
-                    <BrainCircuit className="w-12 h-12 mb-4" />
-                    <p className="text-sm font-semibold">Set inputs and run a prediction</p>
-                  </div>
-                ) : (
-                  <AnimatePresence mode="wait">
-                    <motion.div key={prediction} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-                      <div className="flex items-end gap-4">
-                        <div className={cn('text-7xl font-black tabular-nums', probColor(prob))}>{(prob * 100).toFixed(1)}</div>
-                        <div className="pb-2">
-                          <p className="text-2xl font-black text-slate-300">%</p>
-                          <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">P({config.outcome_col} = 1)</p>
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-                          <motion.div className={cn('h-full rounded-full', probBg(prob))}
-                            initial={{ width: 0 }} animate={{ width: `${prob * 100}%` }} transition={{ duration: 0.6, ease: 'easeOut' }} />
-                        </div>
-                        <div className="flex justify-between text-[9px] font-mono text-slate-300"><span>0%</span><span>50%</span><span>100%</span></div>
-                      </div>
-                      <div className={cn('rounded-2xl px-5 py-4 flex items-center gap-4',
-                        prob > 0.6 ? 'bg-emerald-50 border border-emerald-200' : prob > 0.35 ? 'bg-amber-50 border border-amber-200' : 'bg-rose-50 border border-rose-200')}>
-                        <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center shrink-0', probBg(prob))}>
-                          {prob > 0.6 ? <CheckCircle2 className="w-5 h-5 text-white" /> : <AlertCircle className="w-5 h-5 text-white" />}
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-800 text-sm">
-                            {prob > 0.6 ? 'High likelihood' : prob > 0.35 ? 'Moderate likelihood' : 'Low likelihood'}
-                          </p>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            {prob > 0.6 ? 'High confidence positive prediction.' : prob > 0.35 ? 'Uncertain — consider adjusting inputs.' : 'Negative prediction given these inputs.'}
-                          </p>
-                        </div>
-                      </div>
-                    </motion.div>
-                  </AnimatePresence>
-                )}
-              </div>
-
-              {history.length > 0 && (
-                <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-                  <h3 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-4">Prediction History</h3>
-                  <div className="space-y-2">
-                    {history.map((h, i) => (
-                      <div key={i} className="flex items-center justify-between px-4 py-3 bg-slate-50 rounded-xl gap-3">
-                        <span className="text-xs text-slate-500 truncate">{h.label}</span>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                            <div className={cn('h-full rounded-full', probBg(h.result))} style={{ width: `${h.result * 100}%` }} />
-                          </div>
-                          <span className={cn('text-sm font-black w-12 text-right', probColor(h.result))}>
-                            {(h.result * 100).toFixed(1)}%
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-
-          {/* ── SWEEP MODE ── */}
-          {mode === 'sweep' && (
-            <>
-              {/* Sweep config */}
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-                <div className="flex items-center gap-2 mb-5">
-                  <TrendingUp className="w-4 h-4 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-slate-700">Sweep Configuration</h3>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Sweep Feature (X axis)</label>
-                    <select
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
-                      value={sweepFeature}
-                      onChange={e => { setSweepFeature(e.target.value); setSweepResults([]); setCurrentProb(null); }}>
-                      {featureCols.map(c => (
-                        <option key={c.name} value={c.name}>{c.name.replace(/_/g, ' ')}</option>
-                      ))}
-                    </select>
-                  </div>
-                  {sweepCol?.type === 'numeric' && (
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
-                        Resolution ({sweepSteps} steps)
-                      </label>
-                      <input type="range" min={5} max={50} step={5}
-                        className="w-full h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer mt-2"
-                        value={sweepSteps}
-                        onChange={e => setSweepSteps(parseInt(e.target.value))} />
-                      <div className="flex justify-between text-[9px] font-mono text-slate-300 mt-1"><span>5</span><span>50</span></div>
-                    </div>
-                  )}
-                </div>
-
-                {sweepCol && (
-                  <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3 mb-4 text-xs text-indigo-700">
-                    <span className="font-bold">{sweepFeature.replace(/_/g, ' ')}</span>
-                    {sweepCol.type === 'numeric'
-                      ? ` will sweep from ${sweepCol.min?.toFixed(1)} to ${sweepCol.max?.toFixed(1)} in ${sweepSteps} steps. All other features use the baseline values on the left.`
-                      : ` will iterate over all ${sweepCol.uniqueValues?.length} unique values. All other features use the baseline values.`}
-                  </div>
-                )}
-
-                {sweepError && <p className="text-rose-500 text-xs mb-3">{sweepError}</p>}
-
-                <button onClick={handleSweep} disabled={sweeping || !sweepFeature}
-                  className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-bold text-sm shadow-md active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-                  {sweeping
-                    ? <><RefreshCw className="w-4 h-4 animate-spin" />Running sweep… {sweepResults.length}/{sweepCol?.type === 'numeric' ? sweepSteps + 1 : sweepCol?.uniqueValues?.length ?? 0}</>
-                    : <><TrendingUp className="w-4 h-4" />Run Sweep</>}
-                </button>
-              </div>
-
-              {/* Sweep chart */}
-              {(sweepResults.length > 0 || sweeping) && (
-                <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-                  <div className="flex items-center justify-between mb-5">
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-700">
-                        P({config.outcome_col} = 1) vs {sweepFeature.replace(/_/g, ' ')}
-                      </h3>
-                      <p className="text-[10px] text-slate-400 mt-0.5">
-                        How outcome probability changes as {sweepFeature.replace(/_/g, ' ')} varies
-                      </p>
-                    </div>
-                    {currentProb !== null && (
-                      <div className="text-right">
-                        <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Baseline prob</p>
-                        <p className={cn('text-lg font-black', probColor(currentProb))}>{(currentProb * 100).toFixed(1)}%</p>
-                      </div>
-                    )}
-                  </div>
-
-                  <ResponsiveContainer width="100%" height={260}>
-                    {sweepCol?.type === 'numeric' ? (
-                      <LineChart data={sweepResults} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                        <XAxis dataKey="x" tick={{ fontSize: 10 }} tickFormatter={v => Number(v).toFixed(0)}
-                          label={{ value: sweepFeature.replace(/_/g, ' '), position: 'insideBottom', offset: -2, fontSize: 10, fill: '#94a3b8' }} />
-                        <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} tickFormatter={v => `${v}%`} />
-                        <Tooltip
-                          formatter={(v: any) => [`${Number(v).toFixed(1)}%`, `P(${config.outcome_col}=1)`]}
-                          labelFormatter={v => `${sweepFeature.replace(/_/g, ' ')}: ${Number(v).toFixed(1)}`}
-                          contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 11 }} />
-                        {currentProb !== null && (
-                          <ReferenceLine y={currentProb * 100} stroke="#6366f1" strokeDasharray="5 3"
-                            label={{ value: 'baseline', fill: '#6366f1', fontSize: 9, position: 'insideTopRight' }} />
-                        )}
-                        <Line type="monotone" dataKey="prob" stroke="#6366f1" strokeWidth={2.5}
-                          dot={false} activeDot={{ r: 5, fill: '#6366f1' }} isAnimationActive={false} />
-                      </LineChart>
-                    ) : (
-                      <BarChart data={sweepResults} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                        <XAxis dataKey="x" tick={{ fontSize: 10 }} />
-                        <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} tickFormatter={v => `${v}%`} />
-                        <Tooltip
-                          formatter={(v: any) => [`${Number(v).toFixed(1)}%`, `P(${config.outcome_col}=1)`]}
-                          contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 11 }} />
-                        <Bar dataKey="prob" fill="#6366f1" radius={[6, 6, 0, 0]} isAnimationActive={false} />
-                      </BarChart>
-                    )}
-                  </ResponsiveContainer>
-
-                  {/* Insight callouts */}
-                  {sweepResults.length > 1 && !sweeping && (() => {
-                    const maxPt = sweepResults.reduce((a, b) => a.prob > b.prob ? a : b);
-                    const minPt = sweepResults.reduce((a, b) => a.prob < b.prob ? a : b);
-                    const range = maxPt.prob - minPt.prob;
-                    return (
-                      <div className="mt-5 grid grid-cols-3 gap-3">
-                        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3">
-                          <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 mb-1">Peak probability</p>
-                          <p className="text-lg font-black text-emerald-600">{maxPt.prob.toFixed(1)}%</p>
-                          <p className="text-[10px] text-emerald-500">at {sweepFeature.replace(/_/g, ' ')} = {typeof maxPt.x === 'number' ? Number(maxPt.x).toFixed(1) : maxPt.x}</p>
-                        </div>
-                        <div className="bg-rose-50 border border-rose-100 rounded-2xl px-4 py-3">
-                          <p className="text-[9px] font-bold uppercase tracking-wider text-rose-600 mb-1">Trough probability</p>
-                          <p className="text-lg font-black text-rose-600">{minPt.prob.toFixed(1)}%</p>
-                          <p className="text-[10px] text-rose-500">at {sweepFeature.replace(/_/g, ' ')} = {typeof minPt.x === 'number' ? Number(minPt.x).toFixed(1) : minPt.x}</p>
-                        </div>
-                        <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3">
-                          <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-600 mb-1">Total range</p>
-                          <p className="text-lg font-black text-indigo-600">{range.toFixed(1)}pp</p>
-                          <p className="text-[10px] text-indigo-500">{range > 20 ? 'High sensitivity' : range > 8 ? 'Moderate sensitivity' : 'Low sensitivity'}</p>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {/* Threshold finder */}
-                  {sweepResults.length > 1 && !sweeping && sweepCol?.type === 'numeric' && (() => {
-                    const threshold50 = sweepResults.find(r => r.prob >= 50);
-                    const threshold70 = sweepResults.find(r => r.prob >= 70);
-                    return (threshold50 || threshold70) ? (
-                      <div className="mt-4 bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4">
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">
-                          <SlidersHorizontal className="w-3 h-3 inline mr-1" />Probability Thresholds
-                        </p>
-                        <div className="space-y-2">
-                          {threshold50 && (
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-slate-600">Probability ≥ <span className="font-bold text-amber-600">50%</span></span>
-                              <span className="text-xs font-mono font-bold text-slate-700">
-                                {sweepFeature.replace(/_/g, ' ')} ≥ {Number(threshold50.x).toFixed(1)}
-                              </span>
-                            </div>
-                          )}
-                          {threshold70 && (
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-slate-600">Probability ≥ <span className="font-bold text-emerald-600">70%</span></span>
-                              <span className="text-xs font-mono font-bold text-slate-700">
-                                {sweepFeature.replace(/_/g, ' ')} ≥ {Number(threshold70.x).toFixed(1)}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ) : null;
-                  })()}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
+      )}
     </>
   );
 }
@@ -970,11 +1302,12 @@ function DatasetsPage({ datasets, config, onUpload, onRefresh, onSaveConfig }: {
   const [editOutcome, setEditOutcome] = useState(config?.outcome_col ?? '');
   const [editResponse, setEditResponse] = useState(config?.response_col ?? '');
   const [editPrimary, setEditPrimary] = useState(config?.primary_id ?? 0);
+  const [editKFolds, setEditKFolds] = useState(config?.k_folds ?? 5);
 
   const prevConfig = useRef(config);
   if (config !== prevConfig.current) {
     prevConfig.current = config;
-    if (config) { setEditOutcome(config.outcome_col); setEditResponse(config.response_col); setEditPrimary(config.primary_id); }
+    if (config) { setEditOutcome(config.outcome_col); setEditResponse(config.response_col); setEditPrimary(config.primary_id); setEditKFolds(config.k_folds ?? 5); }
   }
 
   const primaryDs = datasets.find(d => d.dataset_id === editPrimary) ?? datasets[0];
@@ -1013,7 +1346,7 @@ function DatasetsPage({ datasets, config, onUpload, onRefresh, onSaveConfig }: {
 
         <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
           <h3 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2"><Settings className="w-4 h-4" /> Model Configuration</h3>
-          <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Primary dataset</label>
               <select className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
@@ -1037,8 +1370,22 @@ function DatasetsPage({ datasets, config, onUpload, onRefresh, onSaveConfig }: {
                 {primaryCols.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                K-Fold CV <span className="text-indigo-500 font-black">{editKFolds}</span>
+              </label>
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-[10px] text-slate-400 font-mono">2</span>
+                <input type="range" min={2} max={20} step={1}
+                  className="flex-1 h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer accent-indigo-600"
+                  value={editKFolds}
+                  onChange={e => setEditKFolds(+e.target.value)} />
+                <span className="text-[10px] text-slate-400 font-mono">20</span>
+              </div>
+              <p className="text-[10px] text-slate-400">folds de cross-validation</p>
+            </div>
           </div>
-          <button onClick={() => onSaveConfig({ outcome_col: editOutcome, response_col: editResponse, primary_id: editPrimary })}
+          <button onClick={() => onSaveConfig({ outcome_col: editOutcome, response_col: editResponse, primary_id: editPrimary, k_folds: editKFolds })}
             className="px-5 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700">
             Save & Retrain
           </button>
@@ -1245,7 +1592,6 @@ function ChainPage({ steps, columns, joinsCount, onRefresh }: {
 }) {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'interaction', colA: '', colB: '', col: '', threshold: '' });
-  // Fetch merged columns (includes joined cols like purchases_purchase_value)
   const [mergedCols, setMergedCols] = useState<ColumnMeta[]>([]);
   useEffect(() => {
     api.getMergedColumns()
@@ -1420,7 +1766,7 @@ export default function App() {
 
       <main className="flex-1 flex flex-col h-full overflow-y-auto">
         {page === 'analytics' && <AnalyticsPage config={config} metrics={metrics} stats={stats} importance={importance} onUpload={() => setShowUpload(true)} />}
-        {page === 'predictions' && <PredictionsPage config={config} datasets={datasets} />}
+        {page === 'predictions' && <PredictionsPage config={config} onRefresh={refresh} />}
         {page === 'datasets' && <DatasetsPage datasets={datasets} config={config} onUpload={() => setShowUpload(true)} onRefresh={refresh} onSaveConfig={saveConfig} />}
         {page === 'joins' && <JoinsPage datasets={datasets} joins={joins} onRefresh={refresh} />}
         {page === 'chain' && <ChainPage steps={steps} columns={primaryDs?.schema ?? []} joinsCount={joins.length} onRefresh={refresh} />}

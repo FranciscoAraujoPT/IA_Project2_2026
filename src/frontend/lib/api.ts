@@ -116,3 +116,23 @@ export const predict = (row: Record<string, any>): Promise<{ probability: number
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(row),
   });
+
+export const getKFoldMetrics = (): Promise<import('./types').KFoldMetrics | Record<string, never>> =>
+  request('/kfold-metrics');
+
+export const getKFoldSample = (pct = 0.30, threshold = 0.5): Promise<import('./types').KFoldSampleResponse> =>
+  request(`/kfold-sample?pct=${pct}&threshold=${threshold}`);
+
+export const getSampleRows = (n?: number): Promise<import('./types').SampleRowsResponse> =>
+  request(`/sample-rows${n !== undefined ? `?n=${n}` : ''}`);
+
+export const predictCompare = (
+  row: Record<string, any>,
+  realOutcome: number,
+  threshold?: number,
+): Promise<import('./types').PredictCompareResult> =>
+  request('/predict-compare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ row, real_outcome: realOutcome, threshold }),
+  });

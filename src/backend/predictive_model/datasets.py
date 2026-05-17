@@ -104,6 +104,10 @@ class DatasetManager:
                     primary_id   INTEGER NOT NULL DEFAULT 0
                 );
             """)
+            try:
+                conn.execute("ALTER TABLE project_config ADD COLUMN k_folds INTEGER NOT NULL DEFAULT 5")
+            except Exception:
+                pass
 
     # ── Dataset CRUD ──────────────────────────────────────────────────────────
 
@@ -179,17 +183,19 @@ class DatasetManager:
 
     def get_config(self) -> dict:
         with self._conn() as conn:
-            row = conn.execute("SELECT * FROM project_config WHERE id=1").fetchone()
+            row = conn.execute(
+                "SELECT outcome_col, response_col, primary_id, k_folds FROM project_config WHERE id=1"
+            ).fetchone()
         if not row:
-            return {"outcome_col": "", "response_col": "", "primary_id": 0}
-        return {"outcome_col": row[1], "response_col": row[2], "primary_id": row[3]}
+            return {"outcome_col": "", "response_col": "", "primary_id": 0, "k_folds": 5}
+        return {"outcome_col": row[0], "response_col": row[1], "primary_id": row[2], "k_folds": row[3] if row[3] is not None else 5}
 
-    def set_config(self, outcome_col: str, response_col: str, primary_id: int) -> None:
+    def set_config(self, outcome_col: str, response_col: str, primary_id: int, k_folds: int = 5) -> None:
         with self._conn() as conn:
             conn.execute("""
-                INSERT OR REPLACE INTO project_config (id, outcome_col, response_col, primary_id)
-                VALUES (1, ?, ?, ?)
-            """, (outcome_col, response_col, primary_id))
+                INSERT OR REPLACE INTO project_config (id, outcome_col, response_col, primary_id, k_folds)
+                VALUES (1, ?, ?, ?, ?)
+            """, (outcome_col, response_col, primary_id, max(2, min(20, k_folds))))
 
     # ── Merge datasets into one DataFrame ────────────────────────────────────
 

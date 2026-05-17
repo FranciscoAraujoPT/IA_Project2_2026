@@ -38,6 +38,7 @@ export interface ProjectConfig {
   outcome_col: string;
   response_col: string;
   primary_id: number;
+  k_folds: number;
 }
 
 export interface ModelMetrics {
@@ -64,3 +65,42 @@ export interface FeatureImportance {
 }
 
 export type Tab = 'upload' | 'join' | 'chain' | 'analyze' | 'predict';
+
+export interface KFoldMetrics {
+  k: number;
+  accuracy: { mean: number; std: number };
+  roc_auc: { mean: number; std: number };
+  f1: { mean: number; std: number };
+  precision: { mean: number; std: number };
+  recall: { mean: number; std: number };
+  fold_aucs: number[];
+}
+
+export interface SampleRowsResponse {
+  outcome_col: string;
+  rows: Record<string, any>[];
+}
+
+export interface PredictCompareResult {
+  probability: number;
+  percentage: number;
+  predicted: number;
+  real: number | null;
+  correct: boolean | null;
+}
+
+export interface KFoldSampleRow {
+  _fold: number;
+  _real: number;
+  _prob: number;
+  _predicted: number;
+  _correct: boolean;
+  [key: string]: any;
+}
+
+export interface KFoldSampleResponse {
+  outcome_col: string;
+  rows: KFoldSampleRow[];
+  total: number;
+  k: number;
+}

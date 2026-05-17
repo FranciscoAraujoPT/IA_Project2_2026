@@ -48,8 +48,9 @@ def retrain() -> None:
     if df.empty:
         return
     steps = chain_store.list_steps()
+    k_folds = int(config.get("k_folds", 5))
     try:
-        model.train(df, outcome_col, steps)
+        model.train(df, outcome_col, steps, k=k_folds)
     except Exception as exc:
         print(f"[app] Training failed: {exc}")
 
@@ -93,7 +94,8 @@ def upload_dataset():
             (c["name"] for c in schema if c["type"] == "numeric" and any(kw in c["name"].lower() for kw in ["time", "wait", "response", "delay"]) and c["name"] != resolved_outcome),
             next((c["name"] for c in schema if c["type"] == "numeric" and c["name"] != resolved_outcome), "")
         )
-        datasets.set_config(resolved_outcome, resolved_response, dataset_id)
+        existing_k = datasets.get_config().get("k_folds", 5)
+        datasets.set_config(resolved_outcome, resolved_response, dataset_id, existing_k)
 
         # Auto-generate chain steps
         auto_steps = auto_generate_steps(schema, resolved_outcome)
@@ -165,7 +167,8 @@ def set_config():
     datasets.set_config(
         body.get("outcome_col", ""),
         body.get("response_col", ""),
-        int(body.get("primary_id", 0))
+        int(body.get("primary_id", 0)),
+        int(body.get("k_folds", 5)),
     )
     retrain()
     return jsonify({"success": True})
@@ -339,6 +342,145 @@ def predict_inputs():
         )
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+# ── K-Fold & Testing ──────────────────────────────────────────────────────────
+
+@app.route("/api/kfold-metrics", methods=["GET"])
+def get_kfold_metrics():
+    return jsonify(model.get_cv_metrics())
+
+
+@app.route("/api/sample-rows", methods=["GET"])
+def sample_rows():
+    import json, math
+
+    def sanitize(obj):
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
+        if isinstance(obj, dict):
+            return {k: sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [sanitize(v) for v in obj]
+        return obj
+
+    try:
+        n = int(request.args.get("n", 20))
+        df = datasets.get_merged_df()
+        config = datasets.get_config()
+        outcome_col = config.get("outcome_col", "")
+
+        if df.empty or not outcome_col or outcome_col not in df.columns:
+            return jsonify({"outcome_col": outcome_col, "rows": []})
+
+        valid = df[df[outcome_col].notna()].copy()
+        sample = valid.sample(min(n, len(valid)), random_state=None)
+
+        steps = chain_store.list_steps()
+        source_cols: set[str] = set()
+        for step in steps:
+            if not step.enabled:
+                continue
+            cfg = step.config
+            if step.type in ("log", "binary_threshold", "passthrough", "encode"):
+                c = cfg.get("col", "")
+                if c:
+                    source_cols.add(c)
+            elif step.type in ("interaction", "ratio"):
+                for key in ("colA", "colB"):
+                    c = cfg.get(key, "")
+                    if c:
+                        source_cols.add(c)
+
+        cols_to_return = [c for c in source_cols if c in sample.columns and c != outcome_col]
+        cols_to_return.append(outcome_col)
+
+        rows = [sanitize(row.to_dict()) for _, row in sample[cols_to_return].iterrows()]
+        return app.response_class(
+            json.dumps({"outcome_col": outcome_col, "rows": rows}, allow_nan=False),
+            mimetype="application/json",
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/kfold-sample", methods=["GET"])
+def kfold_sample():
+    """Return a percentage sample of K-Fold test rows (pre-computed during training)."""
+    import json, math, random as rand_mod
+
+    def sanitize(obj):
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
+        if isinstance(obj, dict):
+            return {k: sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [sanitize(v) for v in obj]
+        return obj
+
+    if not model.is_trained:
+        return jsonify({"error": "Model not trained yet"}), 503
+
+    rows = model.cv_test_rows
+    if not rows:
+        return jsonify({"outcome_col": "", "rows": [], "total": 0, "k": 0})
+
+    pct = max(0.01, min(1.0, float(request.args.get("pct", 0.30))))
+    threshold = float(request.args.get("threshold", 0.5))
+
+    n = max(1, round(len(rows) * pct))
+    sample = rand_mod.sample(rows, min(n, len(rows)))
+
+    # Apply current threshold to recompute predicted/correct
+    result_rows = []
+    for row in sample:
+        r = dict(row)
+        r["_predicted"] = int(r["_prob"] >= threshold)
+        r["_correct"] = r["_real"] == r["_predicted"]
+        result_rows.append(sanitize(r))
+
+    result_rows.sort(key=lambda r: r.get("_fold", 0))
+
+    config = datasets.get_config()
+    outcome_col = config.get("outcome_col", "")
+    k_val = model.cv_metrics.get("k", 0)
+
+    return app.response_class(
+        json.dumps({
+            "outcome_col": outcome_col,
+            "rows": result_rows,
+            "total": len(rows),
+            "k": k_val,
+        }, allow_nan=False),
+        mimetype="application/json",
+    )
+
+
+@app.route("/api/predict-compare", methods=["POST"])
+def predict_compare():
+    body = request.get_json(force=True)
+    if not model.is_trained:
+        return jsonify({"error": "Model not trained yet"}), 503
+
+    row = body.get("row", {})
+    real_outcome = body.get("real_outcome")
+    threshold = float(body.get("threshold", 0.5))
+
+    steps = chain_store.list_steps()
+    try:
+        prob = model.predict(row, steps)
+        predicted = int(prob >= threshold)
+        real = int(real_outcome) if real_outcome is not None else None
+        correct = (predicted == real) if real is not None else None
+        return jsonify({
+            "probability": prob,
+            "percentage": round(prob * 100, 1),
+            "predicted": predicted,
+            "real": real,
+            "correct": correct,
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
