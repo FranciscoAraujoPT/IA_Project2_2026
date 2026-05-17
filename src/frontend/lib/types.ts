@@ -104,3 +104,11 @@ export interface KFoldSampleResponse {
   total: number;
   k: number;
 }
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  status: 'online' | 'waiting_for_data';
+  supports_prediction: boolean;
+  metrics: Partial<ModelMetrics> & { model_id?: string };
+}

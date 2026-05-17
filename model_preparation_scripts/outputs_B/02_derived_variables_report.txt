@@ -6,4 +6,4 @@ is_peak_season: OK
 converted: OK
 
 Number of mismatched rows: 0
-Mismatches file: outputs_B/02_derived_variable_mismatches.csv
+Mismatches file: model_preparation_scripts/outputs_large_B/02_derived_variable_mismatches.csv

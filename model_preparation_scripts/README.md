@@ -1,12 +1,40 @@
 # Preparação, validação e análise dos datasets
 
+## `00_generate_large_datasets.py` — Geração de datasets maiores
+
+Este script gera versões sintéticas maiores dos datasets A, B e C, mantendo a
+interpretação de cada cenário:
+
+- Dataset A: causalidade provável entre resposta rápida e conversão
+- Dataset B: relação inconclusiva entre resposta rápida e conversão
+- Dataset C: correlação com risco de confounding por sazonalidade/payday
+
+Exemplo:
+
+```bash
+python3 00_generate_large_datasets.py --rows 5000 --output-dir .
+```
+
+Ficheiros gerados:
+
+- `dataset_A_causality_likely_contacts_train.csv`
+- `dataset_A_causality_likely_purchases.csv`
+- `dataset_B_inconclusive_contacts_train.csv`
+- `dataset_B_inconclusive_purchases.csv`
+- `dataset_C_correlation_not_causality_contacts_train.csv`
+- `dataset_C_correlation_not_causality_purchases.csv`
+
+O script mantém a coerência entre `converted` e `purchases.related_contact_id`,
+e recalcula `response_time_min`, `is_payday_period` e `is_peak_season` de forma
+compatível com os scripts de validação.
+
 ## `01_validate_data.py` — Validação dos dados
 
 Este script valida a estrutura base de cada dataset.
 
 Verifica:
 
-- 500 linhas
+- número de linhas gerado
 - 14 colunas
 - `contact_id` único
 - sem nulos inesperados
@@ -135,13 +163,13 @@ não foram usadas como input do modelo, pois só são conhecidas depois da compr
 
 Os dados foram divididos em:
 
-- 80% para treino
-- 20% para teste
+- 70% para treino
+- 30% para teste
 
-Num dataset de 500 linhas:
+Num dataset de 5000 linhas:
 
-- 400 linhas para treino
-- 100 linhas para teste
+- 3500 linhas para treino
+- 1500 linhas para teste
 
 O conjunto de treino é usado para o modelo aprender padrões.  
 O conjunto de teste é usado para avaliar se o modelo consegue generalizar para dados novos.
@@ -271,7 +299,7 @@ python 07_train_gradient_boosting.py --input-dir outputs_A/model_ready
 Os três datasets estão consistentes:
 
 ```text
-500 linhas
+5000 linhas por dataset de contactos
 14 colunas
 sem nulos inesperados
 contact_id único

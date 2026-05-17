@@ -7,7 +7,7 @@ import {
   Activity, Target, BrainCircuit, Database, Plus, Upload,
   Trash2, RefreshCw, CheckCircle2, AlertCircle, Settings,
   Layers, Link2, GitBranch, ToggleLeft, ToggleRight, X, ChevronDown, ChevronUp,
-  SlidersHorizontal, Lock, Unlock, TrendingUp, Zap,
+  SlidersHorizontal, TrendingUp, Zap,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -17,7 +17,7 @@ import { useAppState } from './hooks/useAppState';
 import * as api from './lib/api';
 import type {
   Dataset, JoinRule, ChainStep, ProjectConfig,
-  ModelMetrics, StatBucket, FeatureImportance, ColumnMeta, KFoldMetrics,
+  ModelMetrics, StatBucket, FeatureImportance, ColumnMeta, KFoldMetrics, ModelInfo,
 } from './lib/types';
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
@@ -304,6 +304,14 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
 }) {
   const avgRate = stats.length ? stats.reduce((a, s) => a + s.purchaseRate, 0) / stats.filter(s => s.total > 0).length : 0;
   const [kfold, setKfold] = useState<KFoldMetrics | null>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [selectedModel, setSelectedModel] = useState('logistic_regression');
+  const [modelMetrics, setModelMetrics] = useState<ModelMetrics>(metrics);
+  const [modelImportance, setModelImportance] = useState<FeatureImportance[]>(importance);
+
+  useEffect(() => {
+    api.listModels().then(setModels).catch(() => {});
+  }, [metrics.trained]);
 
   useEffect(() => {
     if (!metrics.trained) return;
@@ -312,6 +320,12 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
       .catch(() => {});
   }, [metrics.trained, metrics.samples, config?.k_folds]);
 
+  useEffect(() => {
+    if (!metrics.trained) return;
+    api.getMetrics(selectedModel).then(setModelMetrics).catch(() => {});
+    api.getImportance(selectedModel).then(setModelImportance).catch(() => {});
+  }, [selectedModel, metrics.trained, metrics.samples]);
+
   return (
     <>
       <header className="h-20 bg-white border-b border-slate-200 px-8 flex items-center justify-between shadow-sm sticky top-0 z-10">
@@ -319,9 +333,24 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
           <h1 className="text-xl font-bold text-slate-800">Analytics</h1>
           {config?.outcome_col && <p className="text-xs text-slate-400 mt-0.5">Outcome: <span className="font-semibold text-indigo-600">{config.outcome_col}</span> · X-axis: <span className="font-semibold text-indigo-600">{config.response_col}</span></p>}
         </div>
-        <button onClick={onUpload} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700">
-          <Upload className="w-3.5 h-3.5" /> Add Dataset
-        </button>
+        <div className="flex items-center gap-3">
+          {models.length > 0 && (
+            <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
+              {models.map(m => (
+                <button key={m.id} onClick={() => setSelectedModel(m.id)}
+                  disabled={!m.supports_prediction}
+                  className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all',
+                    selectedModel === m.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700',
+                    !m.supports_prediction && 'opacity-40 cursor-not-allowed')}>
+                  {m.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <button onClick={onUpload} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700">
+            <Upload className="w-3.5 h-3.5" /> Add Dataset
+          </button>
+        </div>
       </header>
 
       {!config?.outcome_col ? (
@@ -336,13 +365,13 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
             {[
               {
                 label: 'AUC-ROC',
-                value: kfold ? kfold.roc_auc.mean.toFixed(4) : (metrics.roc_auc?.toFixed(4) ?? '—'),
-                sub: kfold ? `±${kfold.roc_auc.std.toFixed(4)} · ${kfold.k}-Fold CV` : 'aguarda treino',
+                value: kfold && selectedModel === 'logistic_regression' ? kfold.roc_auc.mean.toFixed(4) : (modelMetrics.roc_auc?.toFixed(4) ?? '—'),
+                sub: kfold && selectedModel === 'logistic_regression' ? `±${kfold.roc_auc.std.toFixed(4)} · ${kfold.k}-Fold CV` : 'training set',
               },
               {
                 label: 'Accuracy',
-                value: kfold ? `${(kfold.accuracy.mean * 100).toFixed(1)}%` : (metrics.accuracy ? `${(metrics.accuracy * 100).toFixed(1)}%` : '—'),
-                sub: kfold ? `±${(kfold.accuracy.std * 100).toFixed(1)}pp · ${kfold.k}-Fold CV` : 'aguarda treino',
+                value: kfold && selectedModel === 'logistic_regression' ? `${(kfold.accuracy.mean * 100).toFixed(1)}%` : (modelMetrics.accuracy ? `${(modelMetrics.accuracy * 100).toFixed(1)}%` : '—'),
+                sub: kfold && selectedModel === 'logistic_regression' ? `±${(kfold.accuracy.std * 100).toFixed(1)}pp · ${kfold.k}-Fold CV` : 'awaiting training',
               },
               {
                 label: 'Avg Outcome Rate',
@@ -351,8 +380,8 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
               },
               {
                 label: 'Features',
-                value: metrics.features ?? '—',
-                sub: 'após chain',
+                value: modelMetrics.features ?? '—',
+                sub: 'after chain',
               },
             ].map(k => (
               <Card key={k.label} title={k.label} icon={<Activity className="w-4 h-4" />}>
@@ -379,7 +408,7 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
                   <XAxis dataKey="range" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 9, fontWeight: 600 }} interval={0} angle={-20} textAnchor="end" height={40} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} tickFormatter={v => `${(v * 100).toFixed(0)}%`} />
                   <Tooltip contentStyle={{ border: 'none', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,.08)', fontSize: '12px' }}
-                    formatter={(v: number, _n, p) => [`${(v * 100).toFixed(1)}% (n=${p.payload.total})`, config.outcome_col]} />
+                    formatter={(v: any, _n: any, p: any) => [`${(Number(v) * 100).toFixed(1)}% (n=${p.payload.total})`, config.outcome_col]} />
                   <Bar dataKey="purchaseRate" fill="#6366f1" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -388,42 +417,42 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
 
           <div className="md:col-span-4 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm overflow-y-auto max-h-[400px]">
             <h3 className="text-sm font-bold text-slate-700 mb-4">Feature Importance</h3>
-            {importance.slice(0, 12).map((f, i) => (
+            {modelImportance.slice(0, 12).map((f, i) => (
               <div key={f.feature} className="mb-3">
                 <div className="flex justify-between text-xs mb-1">
                   <span className="text-slate-600 truncate max-w-[150px]">{f.feature}</span>
                   <span className="font-mono text-slate-400">{f.importance.toFixed(4)}</span>
                 </div>
                 <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${(f.importance / (importance[0]?.importance || 1)) * 100}%`, opacity: 1 - i * 0.05 }} />
+                  <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${(f.importance / (modelImportance[0]?.importance || 1)) * 100}%`, opacity: 1 - i * 0.05 }} />
                 </div>
               </div>
             ))}
-            {!importance.length && <p className="text-sm text-slate-300 text-center py-8">Train the model to see importance</p>}
+            {!modelImportance.length && <p className="text-sm text-slate-300 text-center py-8">Train the model to see importance</p>}
           </div>
 
-          {metrics.trained && (
+          {modelMetrics.trained && (
             <div className="md:col-span-12 grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
                 {
                   label: 'F1 Score',
-                  value: kfold ? kfold.f1.mean.toFixed(4) : (metrics.f1?.toFixed(4) ?? '—'),
-                  sub: kfold ? `±${kfold.f1.std.toFixed(4)}` : '',
+                  value: kfold && selectedModel === 'logistic_regression' ? kfold.f1.mean.toFixed(4) : (modelMetrics.f1?.toFixed(4) ?? '—'),
+                  sub: kfold && selectedModel === 'logistic_regression' ? `±${kfold.f1.std.toFixed(4)}` : '',
                 },
                 {
                   label: 'Precision',
-                  value: kfold ? kfold.precision.mean.toFixed(4) : (metrics.precision?.toFixed(4) ?? '—'),
-                  sub: kfold ? `±${kfold.precision.std.toFixed(4)}` : '',
+                  value: kfold && selectedModel === 'logistic_regression' ? kfold.precision.mean.toFixed(4) : (modelMetrics.precision?.toFixed(4) ?? '—'),
+                  sub: kfold && selectedModel === 'logistic_regression' ? `±${kfold.precision.std.toFixed(4)}` : '',
                 },
                 {
                   label: 'Recall',
-                  value: kfold ? kfold.recall.mean.toFixed(4) : (metrics.recall?.toFixed(4) ?? '—'),
-                  sub: kfold ? `±${kfold.recall.std.toFixed(4)}` : '',
+                  value: kfold && selectedModel === 'logistic_regression' ? kfold.recall.mean.toFixed(4) : (modelMetrics.recall?.toFixed(4) ?? '—'),
+                  sub: kfold && selectedModel === 'logistic_regression' ? `±${kfold.recall.std.toFixed(4)}` : '',
                 },
                 {
                   label: 'Positive Rate',
-                  value: metrics.positive_rate ? `${(metrics.positive_rate * 100).toFixed(1)}%` : '—',
-                  sub: 'base de dados',
+                  value: modelMetrics.positive_rate ? `${(modelMetrics.positive_rate * 100).toFixed(1)}%` : '—',
+                  sub: 'dataset',
                 },
               ].map(k => (
                 <Card key={k.label} title={k.label} icon={<Activity className="w-4 h-4" />}>
@@ -440,11 +469,11 @@ function AnalyticsPage({ config, metrics, stats, importance, onUpload }: {
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <BrainCircuit className="w-4 h-4 text-indigo-500" />
-                  <h3 className="text-sm font-bold text-slate-700">AUC por Fold</h3>
+                  <h3 className="text-sm font-bold text-slate-700">AUC per Fold</h3>
                   <Badge color="indigo">{kfold.k}-Fold CV</Badge>
                 </div>
                 <p className="text-[10px] text-slate-400 font-mono">
-                  média {kfold.roc_auc.mean.toFixed(4)} ± {kfold.roc_auc.std.toFixed(4)}
+                  mean {kfold.roc_auc.mean.toFixed(4)} ± {kfold.roc_auc.std.toFixed(4)}
                 </p>
               </div>
               <ResponsiveContainer width="100%" height={110}>
@@ -482,6 +511,12 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
 
   const [mode, setMode] = useState<PredMode>('manual');
   const [threshold, setThreshold] = useState(0.5);
+  const [selectedModel, setSelectedModel] = useState('logistic_regression');
+  const [models, setModels] = useState<ModelInfo[]>([]);
+
+  useEffect(() => {
+    api.listModels().then(setModels).catch(() => {});
+  }, [config?.outcome_col]);
 
   // ── Shared baseline values ─────────────────────────────────────────────────
   const [baseValues, setBaseValues] = useState<Record<string, any>>({});
@@ -503,7 +538,6 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
 
   // ── Test DB mode state (K-Fold) ───────────────────────────────────────────
   const [kfoldRows, setKfoldRows] = useState<Record<string, any>[]>([]);
-  const [kfoldOutcomeCol, setKfoldOutcomeCol] = useState('');
   const [kfoldPct, setKfoldPct] = useState(0.30);
   const [kfoldTotal, setKfoldTotal] = useState(0);
   const [kfoldK, setKfoldK] = useState(0);
@@ -573,7 +607,7 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
     setPredicting(true); setError(null);
     try {
       const row = buildRow();
-      const d = await api.predict(row);
+      const d = await api.predict(row, selectedModel);
       setPrediction(d.probability);
       const activeEntries = Object.entries(row).filter(([k]) => !ignoredFeatures.has(k));
       const label = activeEntries.slice(0, 2)
@@ -598,7 +632,7 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
         const xs = Array.from({ length: sweepSteps + 1 }, (_, i) => parseFloat((min + i * step).toFixed(2)));
         for (const x of xs) {
           const row = buildRow({ [sweepFeature]: x });
-          const d = await api.predict(row);
+          const d = await api.predict(row, selectedModel);
           points.push({ x, prob: parseFloat((d.probability * 100).toFixed(1)) });
           setSweepResults([...points]);
         }
@@ -606,12 +640,12 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
         const vals = col.uniqueValues ?? [];
         for (const v of vals) {
           const row = buildRow({ [sweepFeature]: v });
-          const d = await api.predict(row);
+          const d = await api.predict(row, selectedModel);
           points.push({ x: v, prob: parseFloat((d.probability * 100).toFixed(1)) });
           setSweepResults([...points]);
         }
       }
-      const base = await api.predict(buildRow());
+      const base = await api.predict(buildRow(), selectedModel);
       setCurrentProb(base.probability);
     } catch (err: any) { setSweepError(err.message); }
     finally { setSweeping(false); }
@@ -628,7 +662,6 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
       }
       const resp = await api.getKFoldSample(kfoldPct, threshold);
       setKfoldRows(resp.rows);
-      setKfoldOutcomeCol(resp.outcome_col);
       setKfoldTotal(resp.total);
       setKfoldK(resp.k);
     } catch (e: any) { setTestError(e.message); }
@@ -636,11 +669,11 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
   };
 
   // Recompute predicted/correct client-side when threshold changes (avoids refetch)
-  const computedRows = kfoldRows.map(row => ({
+  const computedRows = (kfoldRows.map(row => ({
     ...row,
     _predicted_now: (row._prob as number) >= threshold ? 1 : 0,
     _correct_now: (row._real as number) === ((row._prob as number) >= threshold ? 1 : 0),
-  }));
+  })) as Array<Record<string, any> & { _predicted_now: number; _correct_now: boolean }>);
   const correctCount = computedRows.filter(r => r._correct_now).length;
   const testAccuracy = computedRows.length > 0 ? correctCount / computedRows.length : null;
   const featureColNames = kfoldRows.length > 0
@@ -675,25 +708,41 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
         <div>
           <h1 className="text-xl font-bold text-slate-800">Predictions</h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Objetivo: <span className="font-semibold text-indigo-600">{config.outcome_col}</span>
+            Target: <span className="font-semibold text-indigo-600">{config.outcome_col}</span>
             {mode !== 'testdb' && (
-              <> · <span className="font-semibold text-slate-600">{activeCount}</span>/{featureCols.length} features activas</>
+              <> · <span className="font-semibold text-slate-600">{activeCount}</span>/{featureCols.length} active features</>
             )}
           </p>
         </div>
-        <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
-          <button onClick={() => setMode('manual')}
-            className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'manual' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
-            <span className="flex items-center gap-1.5"><Zap className="w-3.5 h-3.5" />Manual</span>
-          </button>
-          <button onClick={() => setMode('testdb')}
-            className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'testdb' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
-            <span className="flex items-center gap-1.5"><Database className="w-3.5 h-3.5" />Testar BD</span>
-          </button>
-          <button onClick={() => setMode('sweep')}
-            className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'sweep' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
-            <span className="flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" />Sweep</span>
-          </button>
+        <div className="flex items-center gap-2">
+          {/* Model selector — hidden in Test DB (K-Fold always uses LR) */}
+          {mode !== 'testdb' && models.length > 0 && (
+            <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
+              {models.map(m => (
+                <button key={m.id} onClick={() => { setSelectedModel(m.id); setPrediction(null); setSweepResults([]); }}
+                  disabled={!m.supports_prediction}
+                  className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all',
+                    selectedModel === m.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700',
+                    !m.supports_prediction && 'opacity-40 cursor-not-allowed')}>
+                  {m.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-1 bg-slate-100 rounded-xl p-1">
+            <button onClick={() => setMode('manual')}
+              className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'manual' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+              <span className="flex items-center gap-1.5"><Zap className="w-3.5 h-3.5" />Manual</span>
+            </button>
+            <button onClick={() => setMode('testdb')}
+              className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'testdb' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+              <span className="flex items-center gap-1.5"><Database className="w-3.5 h-3.5" />Test DB</span>
+            </button>
+            <button onClick={() => setMode('sweep')}
+              className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-all', mode === 'sweep' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+              <span className="flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" />Sweep</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -708,13 +757,13 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
               <div className="flex-1 min-w-[200px]">
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    Amostra da BD
+                    DB Sample
                   </label>
                   <span className="text-sm font-black text-indigo-600">
                     {Math.round(kfoldPct * 100)}%
                     {kfoldTotal > 0 && (
                       <span className="text-xs font-normal text-slate-400 ml-1">
-                        ({Math.round(kfoldTotal * kfoldPct)} / {kfoldTotal} linhas)
+                        ({Math.round(kfoldTotal * kfoldPct)} / {kfoldTotal} rows)
                       </span>
                     )}
                   </span>
@@ -731,7 +780,7 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
               {/* K folds selector */}
               <div className="shrink-0">
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Nº de Folds</label>
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">No. of Folds</label>
                   <span className="text-sm font-black text-indigo-600 ml-2">{localK}</span>
                 </div>
                 <input type="range" min={2} max={20} step={1}
@@ -758,8 +807,8 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                   ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                   : <BrainCircuit className="w-3.5 h-3.5" />}
                 {localK !== (config.k_folds ?? 5)
-                  ? `Aplicar ${localK}-Fold & Carregar`
-                  : kfoldK > 0 ? `Recarregar (${kfoldK}-Fold CV)` : `Carregar ${localK}-Fold CV`}
+                  ? `Apply ${localK}-Fold & Load`
+                  : kfoldK > 0 ? `Reload (${kfoldK}-Fold CV)` : `Load ${localK}-Fold CV`}
               </button>
             </div>
             {testError && <p className="text-rose-500 text-xs mt-3">{testError}</p>}
@@ -769,24 +818,24 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
           {testAccuracy !== null && (
             <div className="grid grid-cols-4 gap-4">
               <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm text-center">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Acertos</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Correct</p>
                 <p className="text-3xl font-black text-emerald-500">{correctCount}</p>
                 <p className="text-xs text-slate-400 mt-1">de {computedRows.length}</p>
               </div>
               <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm text-center">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Precisão</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Accuracy</p>
                 <p className="text-3xl font-black text-indigo-600">{(testAccuracy * 100).toFixed(1)}%</p>
-                <p className="text-xs text-slate-400 mt-1">nesta amostra</p>
+                <p className="text-xs text-slate-400 mt-1">in this sample</p>
               </div>
               <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm text-center">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Erros</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Errors</p>
                 <p className="text-3xl font-black text-rose-500">{computedRows.length - correctCount}</p>
                 <p className="text-xs text-slate-400 mt-1">de {computedRows.length}</p>
               </div>
               <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm text-center">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Folds</p>
                 <p className="text-3xl font-black text-slate-700">{kfoldK}</p>
-                <p className="text-xs text-slate-400 mt-1">CV estratificado</p>
+                <p className="text-xs text-slate-400 mt-1">Stratified CV</p>
               </div>
             </div>
           )}
@@ -794,7 +843,7 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
           {/* Per-fold breakdown */}
           {Object.keys(foldBreakdown).length > 0 && (
             <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-4">Resultado por Fold</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-4">Result per Fold</p>
               <div className="flex gap-3 flex-wrap">
                 {Object.entries(foldBreakdown)
                   .sort(([a], [b]) => +a - +b)
@@ -833,9 +882,9 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                         </th>
                       ))}
                       <th className="px-3 py-3 text-left font-bold text-emerald-600 uppercase tracking-wider">Real</th>
-                      <th className="px-3 py-3 text-left font-bold text-indigo-600 uppercase tracking-wider">Previsto</th>
+                      <th className="px-3 py-3 text-left font-bold text-indigo-600 uppercase tracking-wider">Predicted</th>
                       <th className="px-3 py-3 text-left font-bold text-slate-500 uppercase tracking-wider">Prob.</th>
-                      <th className="px-3 py-3 text-left font-bold text-slate-500 uppercase tracking-wider">Resultado</th>
+                      <th className="px-3 py-3 text-left font-bold text-slate-500 uppercase tracking-wider">Result</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
@@ -860,13 +909,13 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                         <td className="px-3 py-2.5">
                           <span className={cn('px-2 py-0.5 rounded-full font-bold text-[10px]',
                             row._real === 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500')}>
-                            {row._real === 1 ? 'Sim' : 'Não'}
+                            {row._real === 1 ? 'Yes' : 'No'}
                           </span>
                         </td>
                         <td className="px-3 py-2.5">
                           <span className={cn('px-2 py-0.5 rounded-full font-bold text-[10px]',
                             row._predicted_now === 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500')}>
-                            {row._predicted_now === 1 ? 'Sim' : 'Não'}
+                            {row._predicted_now === 1 ? 'Yes' : 'No'}
                           </span>
                         </td>
                         <td className="px-3 py-2.5 font-mono">
@@ -876,8 +925,8 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                         </td>
                         <td className="px-3 py-2.5">
                           {row._correct_now
-                            ? <span className="flex items-center gap-1 text-emerald-600 font-bold"><CheckCircle2 className="w-3.5 h-3.5" />Correto</span>
-                            : <span className="flex items-center gap-1 text-rose-500 font-bold"><AlertCircle className="w-3.5 h-3.5" />Errado</span>}
+                            ? <span className="flex items-center gap-1 text-emerald-600 font-bold"><CheckCircle2 className="w-3.5 h-3.5" />Correct</span>
+                            : <span className="flex items-center gap-1 text-rose-500 font-bold"><AlertCircle className="w-3.5 h-3.5" />Wrong</span>}
                         </td>
                       </tr>
                     ))}
@@ -890,8 +939,8 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
           {kfoldRows.length === 0 && !loadingRows && (
             <div className="flex flex-col items-center justify-center py-16 text-slate-300 gap-3">
               <BrainCircuit className="w-12 h-12" />
-              <p className="font-semibold">Clique em "Carregar K-Fold CV" para começar</p>
-              <p className="text-xs">Cada linha foi prevista pelo modelo treinado sem ela (hold-out fold)</p>
+              <p className="font-semibold">Click "Load K-Fold CV" to start</p>
+              <p className="text-xs">Each row was predicted by the model trained without it (hold-out fold)</p>
             </div>
           )}
         </div>
@@ -906,16 +955,16 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
             <div className="bg-indigo-600 rounded-3xl p-6 text-white shadow-lg flex flex-col gap-4">
               <div>
                 <h2 className="text-base font-bold">
-                  {mode === 'sweep' ? 'Baseline & Contexto' : 'Inputs da Pessoa'}
+                  {mode === 'sweep' ? 'Baseline & Context' : 'Person Inputs'}
                 </h2>
                 <p className="text-indigo-200 text-[11px] mt-0.5">
-                  Desative features para usar o valor neutro (média).
+                  Disable features to use the neutral value (mean).
                 </p>
               </div>
 
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[10px] text-indigo-200 font-semibold">
-                  {activeCount} de {featureCols.length} activas
+                  {activeCount} of {featureCols.length} active
                 </span>
                 {ignoredFeatures.size === featureCols.length ? (
                   <button onClick={() => setIgnoredFeatures(new Set())}
@@ -995,7 +1044,7 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                         )
                       )}
                       {isIgnored && !isSweepAxis && (
-                        <p className="text-[9px] text-indigo-300/70 mt-0.5 italic">valor neutro · ative para definir</p>
+                        <p className="text-[9px] text-indigo-300/70 mt-0.5 italic">neutral value · enable to set</p>
                       )}
                     </div>
                   );
@@ -1008,8 +1057,8 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                   <button onClick={handlePredict} disabled={predicting}
                     className="w-full bg-white text-indigo-600 py-3.5 rounded-2xl font-bold text-sm shadow-xl active:scale-[0.98] transition-all disabled:opacity-50">
                     {predicting
-                      ? <span className="flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" />A calcular…</span>
-                      : <span className="flex items-center justify-center gap-2"><Zap className="w-4 h-4" />Prever</span>}
+                      ? <span className="flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" />Calculating…</span>
+                      : <span className="flex items-center justify-center gap-2"><Zap className="w-4 h-4" />Predict</span>}
                   </button>
                 </>
               )}
@@ -1024,12 +1073,12 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
               <>
                 <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm">
                   <h3 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-6">
-                    Resultado — {config.outcome_col}
+                    Result — {config.outcome_col}
                   </h3>
                   {prediction === null ? (
                     <div className="flex flex-col items-center justify-center py-12 text-slate-300">
                       <BrainCircuit className="w-12 h-12 mb-4" />
-                      <p className="text-sm font-semibold">Configure os inputs e clique em Prever</p>
+                      <p className="text-sm font-semibold">Configure inputs and click Predict</p>
                     </div>
                   ) : (
                     <AnimatePresence mode="wait">
@@ -1068,7 +1117,7 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                           </div>
                           <div>
                             <p className={cn('font-black text-xl', prob >= threshold ? 'text-emerald-700' : 'text-rose-700')}>
-                              {prob >= threshold ? 'Cumpre o Objetivo' : 'Não Cumpre o Objetivo'}
+                              {prob >= threshold ? 'Meets the Goal' : 'Does Not Meet the Goal'}
                             </p>
                             <p className="text-xs text-slate-500 mt-0.5">
                               {prob >= threshold
@@ -1096,7 +1145,7 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
 
                 {history.length > 0 && (
                   <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
-                    <h3 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-4">Histórico</h3>
+                    <h3 className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-4">History</h3>
                     <div className="space-y-2">
                       {history.map((h, i) => (
                         <div key={i} className="flex items-center justify-between px-4 py-3 bg-slate-50 rounded-xl gap-3">
@@ -1104,7 +1153,7 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                           <div className="flex items-center gap-2 shrink-0">
                             <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full',
                               h.result >= threshold ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-600')}>
-                              {h.result >= threshold ? 'Cumpre' : 'Não Cumpre'}
+                              {h.result >= threshold ? 'Meets' : "Doesn't Meet"}
                             </span>
                             <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
                               <div className={cn('h-full rounded-full', probMidBg(h.result))} style={{ width: `${h.result * 100}%` }} />
@@ -1127,12 +1176,12 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                 <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
                   <div className="flex items-center gap-2 mb-5">
                     <TrendingUp className="w-4 h-4 text-indigo-500" />
-                    <h3 className="text-sm font-bold text-slate-700">Configuração do Sweep</h3>
+                    <h3 className="text-sm font-bold text-slate-700">Sweep Configuration</h3>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4 mb-4">
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Feature (eixo X)</label>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Feature (X axis)</label>
                       <select
                         className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
                         value={sweepFeature}
@@ -1145,7 +1194,7 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                     {sweepCol?.type === 'numeric' && (
                       <div>
                         <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
-                          Resolução ({sweepSteps} steps)
+                          Resolution ({sweepSteps} steps)
                         </label>
                         <input type="range" min={5} max={50} step={5}
                           className="w-full h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer mt-2"
@@ -1160,8 +1209,8 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                     <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3 mb-4 text-xs text-indigo-700">
                       <span className="font-bold">{sweepFeature.replace(/_/g, ' ')}</span>
                       {sweepCol.type === 'numeric'
-                        ? ` varia de ${sweepCol.min?.toFixed(1)} até ${sweepCol.max?.toFixed(1)} em ${sweepSteps} passos.`
-                        : ` itera sobre ${sweepCol.uniqueValues?.length} valores únicos.`}
+                        ? ` varies from ${sweepCol.min?.toFixed(1)} to ${sweepCol.max?.toFixed(1)} in ${sweepSteps} steps.`
+                        : ` iterates over ${sweepCol.uniqueValues?.length} unique values.`}
                     </div>
                   )}
 
@@ -1170,8 +1219,8 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                   <button onClick={handleSweep} disabled={sweeping || !sweepFeature}
                     className="w-full bg-indigo-600 text-white py-3 rounded-2xl font-bold text-sm shadow-md active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                     {sweeping
-                      ? <><RefreshCw className="w-4 h-4 animate-spin" />A correr… {sweepResults.length}/{sweepCol?.type === 'numeric' ? sweepSteps + 1 : sweepCol?.uniqueValues?.length ?? 0}</>
-                      : <><TrendingUp className="w-4 h-4" />Correr Sweep</>}
+                      ? <><RefreshCw className="w-4 h-4 animate-spin" />Running… {sweepResults.length}/{sweepCol?.type === 'numeric' ? sweepSteps + 1 : sweepCol?.uniqueValues?.length ?? 0}</>
+                      : <><TrendingUp className="w-4 h-4" />Run Sweep</>}
                   </button>
                 </div>
 
@@ -1183,12 +1232,12 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                           P({config.outcome_col} = 1) vs {sweepFeature.replace(/_/g, ' ')}
                         </h3>
                         <p className="text-[10px] text-slate-400 mt-0.5">
-                          Como a probabilidade muda com {sweepFeature.replace(/_/g, ' ')}
+                          How probability changes with {sweepFeature.replace(/_/g, ' ')}
                         </p>
                       </div>
                       {currentProb !== null && (
                         <div className="text-right">
-                          <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Prob. baseline</p>
+                          <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Baseline Prob.</p>
                           <p className={cn('text-lg font-black', probMid(currentProb))}>{(currentProb * 100).toFixed(1)}%</p>
                         </div>
                       )}
@@ -1232,19 +1281,19 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                       return (
                         <div className="mt-5 grid grid-cols-3 gap-3">
                           <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3">
-                            <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 mb-1">Máximo</p>
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600 mb-1">Maximum</p>
                             <p className="text-lg font-black text-emerald-600">{maxPt.prob.toFixed(1)}%</p>
-                            <p className="text-[10px] text-emerald-500">em {sweepFeature.replace(/_/g, ' ')} = {typeof maxPt.x === 'number' ? Number(maxPt.x).toFixed(1) : maxPt.x}</p>
+                            <p className="text-[10px] text-emerald-500">at {sweepFeature.replace(/_/g, ' ')} = {typeof maxPt.x === 'number' ? Number(maxPt.x).toFixed(1) : maxPt.x}</p>
                           </div>
                           <div className="bg-rose-50 border border-rose-100 rounded-2xl px-4 py-3">
-                            <p className="text-[9px] font-bold uppercase tracking-wider text-rose-600 mb-1">Mínimo</p>
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-rose-600 mb-1">Minimum</p>
                             <p className="text-lg font-black text-rose-600">{minPt.prob.toFixed(1)}%</p>
-                            <p className="text-[10px] text-rose-500">em {sweepFeature.replace(/_/g, ' ')} = {typeof minPt.x === 'number' ? Number(minPt.x).toFixed(1) : minPt.x}</p>
+                            <p className="text-[10px] text-rose-500">at {sweepFeature.replace(/_/g, ' ')} = {typeof minPt.x === 'number' ? Number(minPt.x).toFixed(1) : minPt.x}</p>
                           </div>
                           <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3">
-                            <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-600 mb-1">Amplitude</p>
+                            <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-600 mb-1">Range</p>
                             <p className="text-lg font-black text-indigo-600">{range.toFixed(1)}pp</p>
-                            <p className="text-[10px] text-indigo-500">{range > 20 ? 'Alta sensibilidade' : range > 8 ? 'Sensibilidade média' : 'Baixa sensibilidade'}</p>
+                            <p className="text-[10px] text-indigo-500">{range > 20 ? 'High sensitivity' : range > 8 ? 'Medium sensitivity' : 'Low sensitivity'}</p>
                           </div>
                         </div>
                       );
@@ -1256,12 +1305,12 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                       return (threshold50 || threshold70) ? (
                         <div className="mt-4 bg-slate-50 border border-slate-100 rounded-2xl px-5 py-4">
                           <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">
-                            <SlidersHorizontal className="w-3 h-3 inline mr-1" />Limiares de Probabilidade
+                            <SlidersHorizontal className="w-3 h-3 inline mr-1" />Probability Thresholds
                           </p>
                           <div className="space-y-2">
                             {threshold50 && (
                               <div className="flex items-center justify-between">
-                                <span className="text-xs text-slate-600">Probabilidade ≥ <span className="font-bold text-amber-600">50%</span></span>
+                                <span className="text-xs text-slate-600">Probability ≥ <span className="font-bold text-amber-600">50%</span></span>
                                 <span className="text-xs font-mono font-bold text-slate-700">
                                   {sweepFeature.replace(/_/g, ' ')} ≥ {Number(threshold50.x).toFixed(1)}
                                 </span>
@@ -1269,7 +1318,7 @@ function PredictionsPage({ config, onRefresh }: { config: ProjectConfig | null; 
                             )}
                             {threshold70 && (
                               <div className="flex items-center justify-between">
-                                <span className="text-xs text-slate-600">Probabilidade ≥ <span className="font-bold text-emerald-600">70%</span></span>
+                                <span className="text-xs text-slate-600">Probability ≥ <span className="font-bold text-emerald-600">70%</span></span>
                                 <span className="text-xs font-mono font-bold text-slate-700">
                                   {sweepFeature.replace(/_/g, ' ')} ≥ {Number(threshold70.x).toFixed(1)}
                                 </span>
@@ -1382,7 +1431,7 @@ function DatasetsPage({ datasets, config, onUpload, onRefresh, onSaveConfig }: {
                   onChange={e => setEditKFolds(+e.target.value)} />
                 <span className="text-[10px] text-slate-400 font-mono">20</span>
               </div>
-              <p className="text-[10px] text-slate-400">folds de cross-validation</p>
+              <p className="text-[10px] text-slate-400">cross-validation folds</p>
             </div>
           </div>
           <button onClick={() => onSaveConfig({ outcome_col: editOutcome, response_col: editResponse, primary_id: editPrimary, k_folds: editKFolds })}

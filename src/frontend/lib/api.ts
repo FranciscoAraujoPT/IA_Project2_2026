@@ -1,6 +1,6 @@
 import type {
   Dataset, JoinRule, ChainStep, ProjectConfig,
-  ModelMetrics, StatBucket, FeatureImportance, ColumnMeta,
+  ModelMetrics, StatBucket, FeatureImportance, ColumnMeta, ModelInfo,
 } from './types';
 
 const BASE = '/api';
@@ -95,11 +95,14 @@ export const deleteChainStep = (id: number): Promise<{ success: boolean }> =>
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
-export const getMetrics = (): Promise<ModelMetrics> =>
-  request('/metrics');
+export const listModels = (): Promise<ModelInfo[]> =>
+  request('/models');
 
-export const getImportance = (): Promise<FeatureImportance[]> =>
-  request('/importance');
+export const getMetrics = (modelId?: string): Promise<ModelMetrics> =>
+  request(`/metrics${modelId ? `?model=${modelId}` : ''}`);
+
+export const getImportance = (modelId?: string): Promise<FeatureImportance[]> =>
+  request(`/importance${modelId ? `?model=${modelId}` : ''}`);
 
 export const getStats = (): Promise<StatBucket[]> =>
   request('/stats');
@@ -110,8 +113,8 @@ export const getMergedColumns = (): Promise<ColumnMeta[]> =>
 export const getPredictInputs = (): Promise<import('./types').ColumnMeta[]> =>
   request('/predict-inputs');
 
-export const predict = (row: Record<string, any>): Promise<{ probability: number; percentage: number }> =>
-  request('/predict', {
+export const predict = (row: Record<string, any>, modelId?: string): Promise<{ probability: number; percentage: number; model_id?: string }> =>
+  request(`/predict${modelId ? `?model=${modelId}` : ''}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(row),

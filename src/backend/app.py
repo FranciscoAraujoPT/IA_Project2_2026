@@ -251,12 +251,17 @@ def merged_columns():
 
 @app.route("/api/metrics", methods=["GET"])
 def get_metrics():
-    return jsonify(model.get_metrics())
+    return jsonify(model.get_metrics(request.args.get("model")))
 
 
 @app.route("/api/importance", methods=["GET"])
 def get_importance():
-    return jsonify(model.feature_importance())
+    return jsonify(model.feature_importance(request.args.get("model")))
+
+
+@app.route("/api/models", methods=["GET"])
+def list_models():
+    return jsonify(model.list_models())
 
 
 @app.route("/api/stats", methods=["GET"])
@@ -271,8 +276,9 @@ def predict():
         return jsonify({"error": "Model not trained yet"}), 503
     steps = chain_store.list_steps()
     try:
-        prob = model.predict(body, steps)
-        return jsonify({"probability": prob, "percentage": round(prob * 100, 1)})
+        model_id = request.args.get("model")
+        prob = model.predict(body, steps, model_id)
+        return jsonify({"probability": prob, "percentage": round(prob * 100, 1), "model_id": model_id or "logistic_regression"})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
 
